@@ -3,5 +3,5 @@
     - Approaches using genome-scale systems biology to understand regulation. See [Induction Dynamics Expression Atlas](https://idea.research.calicolabs.com/) and [Impulse](https://github.com/calico/impulse).
 
 - My side-projects and past work can be found on [my personal website](shackett.org). Here is a brief rundown.
-    - [Past research](http://www.shackett.org/academics/)
-    - [Fight Prior](http://www.fightprior.com)
+    - :bulb: :hospital: [Past research](http://www.shackett.org/academics/)
+    - :rage3: [Fight Prior](http://www.fightprior.com)
