@@ -1,0 +1,107 @@
+---
+title: "timecourse_shrinkage"
+author: "Sean Hackett"
+date: "9/17/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# estimate the FDR for significant timecourses
+
+```{r timecourse_significance}
+plot(qvalue::qvalue(multivariate_normal_tc_signif$p_multivariate_normal))
+```
+
+```{r timecourse_significance_by_experiment}
+set.seed(1234)
+n_experiments <- multivariate_normal_tc_signif %>%
+  dplyr::distinct(TF, strain, date, restriction, mechanism) %>%
+  dplyr::sample_n(8)
+ggplot(multivariate_normal_tc_signif %>%
+  dplyr::semi_join(n_experiments, by = c("TF", "strain", "date", "restriction", "mechanism")), aes(x = p_multivariate_normal, y = ..density..)) +
+  geom_histogram() +
+  facet_wrap(~ TF + strain + date + mechanism, ncol = 4)
+```
+
+```{r timecourse_filtering}
+#overall_timecourse_signal <- multivariate_normal_tc_signif %>%
+#  dplyr::ungroup() %>%
+#  dplyr::mutate(q_chisq = p.adjust(p_multivariate_normal, method = "BH")) %>%
+  #dplyr::filter(q_chisq < 0.0001)
+#  dplyr::filter(q_chisq < 0.001)
+overall_timecourse_signal <- multivariate_normal_tc_signif %>%
+  dplyr::group_by(TF, strain, date, restriction, mechanism) %>%
+  dplyr::mutate(q_chisq = p.adjust(p_multivariate_normal, method = "BH")) %>%
+  dplyr::ungroup() %>%
+  dplyr::filter(q_chisq < 0.001)
+# Using non-centered z-statics generated from log-fold change and gene + timecourse noise estimate the local false discovery rate (lfdr) of individual observations
+observation_signals <- cleaned_dataset %>%
+  dplyr::semi_join(overall_timecourse_signal, by = c("TF", "strain", "date", "restriction", "mechanism", "gene")) %>%
+  # hold out measurement that are exactly zero since they are zero by construction
+  dplyr::filter(log2_ratio != 0) %>%
+  dplyr::left_join(noise_model$gene_noise, by = "gene") %>%
+  dplyr::left_join(noise_model$timecourse_noise, by = c("TF", "strain", "date", "restriction", "mechanism")) %>%
+  dplyr::mutate(z_score = log2_ratio / sqrt(gene_var + tc_var)) %>%
+  dplyr::mutate(p_norm = 1 - abs(0.5 - pnorm(z_score))*2)
+  
+ggplot(observation_signals, aes(x = p_norm, y = ..density..)) +
+  geom_histogram(bins = 50) +
+  facet_wrap(~ time, scale = "free_y") +
+  ggtitle("Within significant timecourses, early timepoints are generally noise; later timepoints, generally are signal")
+```
+
+```{r observation_level_fdr}
+#Calculate lfdr treating pi as a a monotonic fxn of t : functional false discovery rate testing
+# add functions for calculating pi_0 as a monotonic fxn of a power surrogate (here t).
+# this functionality will soon be added to the qvalue function
+source("~/Desktop/shackett/expression_dynamics/code/R/estimate_fpi0.R")
+# calculate pi_0 for each time point
+library(qvalue)
+pi_zero_by_t <- estimate_fpi0(p = observation_signals$p_norm, z0 = observation_signals$time)$table %>%
+  dplyr::distinct(z0, fpi0) %>%
+  dplyr::group_by(z0) %>%
+  dplyr::slice(1) %>%
+  dplyr::ungroup() %>%
+  dplyr::arrange(z0)
+qplot(y = pi_zero_by_t$fpi0, x = pi_zero_by_t$z0) +
+  scale_x_discrete("Time") +
+  scale_y_continuous(expression(pi[0] ~ "= E[F / (T + F)]")) +
+  theme_bw()
+timepoint_lists <- observation_signals %>%
+  plyr::dlply(.variables = "time", dplyr::tbl_df)
+# calculate the lfdr for each observation using a timepoint specific lfdr
+shrunken_timecourse_estimates <- lapply(timepoint_lists, function(a_time_set) {
+  a_time_set$lfdr <- qvalue::lfdr(a_time_set$p_norm, pi0 = pi_zero_by_t$fpi0[pi_zero_by_t$z0 == a_time_set$time[1]])
+  a_time_set
+}) %>%
+  dplyr::bind_rows() %>%
+  dplyr::mutate(shrunken_log2_ratio = log2_ratio * (1-lfdr)) %>%
+  dplyr::select(TF:gene, tc_level_hard = log2_ratio, tc_level_soft = shrunken_log2_ratio)
+```
+
+```{r}
+tc_distances <- shrunken_timecourse_estimates %>%
+  dplyr::group_by(TF, strain, date, restriction, mechanism, gene) %>%
+  dplyr::arrange(desc(time)) %>%
+  dplyr::slice(1) %>%
+  dplyr::summarize(final_zero_pt = ifelse(tc_level_soft == 0, TRUE, FALSE)) %>%
+  dplyr::left_join(overall_timecourse_signal, by = c("TF", "strain", "date", "restriction", "mechanism", "gene"))
+ggplot(tc_distances, aes(x = q_chisq, y = ..density.., fill =  final_zero_pt)) +
+  geom_density(alpha = 0.5)
+```
+
+
+```{r}
+ggplot(shrunken_timecourse_estimates %>%
+         dplyr::sample_n(2000), aes(x = tc_level_hard, y = tc_level_soft)) +
+  geom_abline(intercept = 0, slope = 1) +
+  geom_point(size = 0.2, color = "RED") +
+  facet_wrap(~ time) +
+  coord_cartesian(xlim = c(-4,4), ylim = c(-4,4)) +
+  theme_minimal()
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
