@@ -44,7 +44,7 @@ set.seed(1234)
 
 # simulate timecourses containing signal 
 
-alt_timecourses <- impulse::simulate_timecourses(n = total_measurements * signal_frac,
+alt_timecourses <- impulse::simulate_timecourses(n = total_measurements * signal_frac * 2,
                                                  timepts = timepts,
                                                  prior_pars = c(v_sd = 0.8,
                                                                 rate_shape = 2,
@@ -57,9 +57,19 @@ alt_timecourses <- impulse::simulate_timecourses(n = total_measurements * signal
   mutate(signal = "contains signal") %>%
   # drop timecourses where no true value's magnitude is greater than 1 (these
   # aren't really signal containing
+  # and timecourses where the initial value isn't ~zero
   group_by(tc_id) %>%
-  filter(any(abs(sim_fit) > 1)) %>%
+  filter(any(abs(sim_fit) > 1),
+         abs(sim_fit[time == 0]) < 0.1) %>%
   ungroup()
+
+# only retain the target number of signal containing timecourses
+alt_timecourses <- alt_timecourses %>%
+  semi_join(
+    alt_timecourses %>%
+      distinct(tc_id) %>%
+      sample_n(min(n(), total_measurements * signal_frac)),
+    by = "tc_id")
 
 knitr::kable(alt_timecourses %>% slice(1:length(timepts)))
 ```
@@ -72,7 +82,10 @@ null_timecourses <- crossing(tc_id = seq(max(alt_timecourses$tc_id) + 1, total_m
          abundance = rnorm(n(), 0, measurement_sd))
 
 simulated_timecourses <- bind_rows(alt_timecourses, null_timecourses) %>%
-  mutate(signal = factor(signal, levels = c("no signal", "contains signal")))
+  mutate(signal = factor(signal, levels = c("contains signal", "no signal"))) %>%
+  group_by(tc_id) %>%
+  mutate(fold_change = abundance - abundance[time == 0]) %>%
+  ungroup()
 ```
 
 
@@ -111,16 +124,20 @@ library(broom)
 library(furrr)
 library(gam)
 
-fit_regression <- function (one_tc, model_type = "polynomial", degree = 1) {
+fit_regression <- function (one_tc, model_fxn = "lm", model_formula, null_formula = NULL) {
 
-  if (model_type == "polynomial") {
-    polynomial_model <- lm(abundance ~ poly(time, degree = degree, raw = TRUE), data = one_tc)
-    null_model <- lm(abundance ~ 1, data = one_tc)
-    model_anova <- anova(null_model, polynomial_model)
-  } else if (model_type == "gam") {
-    model_anova <- gam(abundance ~ s(time), data = one_tc)
+  if (all.vars(model_formula)[1] == "fold_change") {
+    one_tc <- one_tc %>%
+      filter(time != 0)
+  }
+  
+  alt_fit <- do.call(model_fxn, list(data = one_tc, formula = model_formula))
+  
+  if (model_fxn == "lm") {
+    null_fit <- do.call(model_fxn, list(data = one_tc, formula = null_formula))
+    model_anova <- anova(null_fit, alt_fit)
   } else {
-    stop ("not a valid model_type")
+    model_anova <- alt_fit
   }
   
   model_anova %>%
@@ -129,12 +146,37 @@ fit_regression <- function (one_tc, model_type = "polynomial", degree = 1) {
 }
 
 standard_models <- nested_timecourses %>%
-  mutate(linear_fit = future_map(timecourse_data, fit_regression, model_type = "polynomial"),
-         cubic_fit = future_map(timecourse_data, fit_regression, model_type = "polynomial", degree = 3),
-         gam_fit = future_map(timecourse_data, fit_regression, model_type = "gam"))
+  mutate(linear_abundance = future_map(timecourse_data, fit_regression, model_fxn = "lm",
+                                       model_formula = as.formula(abundance ~ time),
+                                       null_formula = as.formula(abundance ~ 1)),
+         linear_foldchange = future_map(timecourse_data, fit_regression, model_fxn = "lm",
+                                        model_formula = as.formula(fold_change ~ time + 0),
+                                        null_formula = as.formula(fold_change ~ 0)),
+         cubic_abundance = future_map(timecourse_data, fit_regression, model_fxn = "lm",
+                                      model_formula = as.formula(abundance ~ poly(time, degree = 3, raw = TRUE)),
+                                      null_formula = as.formula(abundance ~ 1)),
+         cubic_foldchange = future_map(timecourse_data, fit_regression, model_fxn = "lm",
+                                       model_formula = as.formula(fold_change ~ poly(time, degree = 3, raw = TRUE) + 0),
+                                       null_formula = as.formula(fold_change ~ 0)),
+         gam_abundance = future_map(timecourse_data, fit_regression, model_fxn = "gam",
+                                    model_formula = as.formula(abundance ~ s(time))),
+         gam_foldchange = future_map(timecourse_data, fit_regression, model_fxn = "gam",
+                                     model_formula = as.formula(fold_change ~ s(time) + 0)))
 ```
 
-```{r}
+Other models we could have tried.
+- mgcv
+- autocorrelation
+
+- if we had replicates than a categorical model would make sense
+
+
+Since time points are not evenly spaced we could have tried transforming time when fitting the above models. While the timepoints are "exponentially" sampled, taking log(time) would send time zero to -Inf so a better transformation would be using the square root of time as the independent variable.
+
+
+
+
+```{r fdr_control}
 fdr_control <- function(pvalues) {
   qvalue::qvalue(pvalues)$qvalues 
 }
@@ -145,26 +187,60 @@ all_model_fits <- standard_models %>%
   unnest(model_data) %>%
   group_by(model_type) %>%
   mutate(qvalue = fdr_control(p.value),
-         discovery = ifelse(qvalue < 0.1, "positive", "negative"))
+         discovery = ifelse(qvalue < 0.1, "positive", "negative")) %>%
+  separate(model_type, into = c("model", "response"))
 
-ggplot(all_model_fits, aes(x = p.value, fill = discovery)) +
-  facet_grid(signal ~ model_type) +
+ggplot(all_model_fits, aes(x = p.value, fill = signal)) +
+  facet_grid(model ~ response) +
   geom_histogram(bins = 25) +
   scale_fill_brewer(palette = "Set1")
 ```
 
 ```{r}
-tricky_tcs <- all_model_fits %>%
-  filter(model_type == "gam_fit", signal == "contains signal") %>%
+all_model_fits %>%
+  count(signal, model, response, discovery) %>%
+  mutate(correct = case_when(signal == "no signal" & discovery == "negative" ~ "true negative",
+                             signal == "no signal" & discovery == "positive" ~ "false positive",
+                             signal == "contains signal" & discovery == "negative" ~ "false negative",
+                             signal == "contains signal" & discovery == "positive" ~ "true positive")) %>%
+  select(model, response, correct, n) %>%
+  spread(correct, n) %>%
+  arrange(response) %>%
+  mutate(fdr = `false positive` / (`false positive` + `true positive`),
+         recall = `true positive` / (`false negative` + `true positive`)) %>%
+  knitr::kable()
+```
+
+
+```{r}
+extreme_false_negatives <- all_model_fits %>%
+  filter(signal == "contains signal" & response == "abundance" & model %in% c("cubic", "gam")) %>%
+  group_by(model, response) %>%
   arrange(desc(qvalue)) %>%
-  slice(1:8)
+  slice(1:5) %>%
+  mutate(label = as.character(1:n())) %>%
+  select(tc_id, model, response, label) %>%
+  ungroup() %>%
+   mutate(facet_label = glue::glue("{response} {model} model false negatives"))
+
+extreme_false_positives <- all_model_fits %>%
+  filter(signal == "no signal" & response == "foldchange" & model %in% c("cubic", "gam")) %>%
+  group_by(model, response) %>%
+  sample_n(5) %>%
+  mutate(label = as.character(1:n())) %>%
+  select(tc_id, model, response, label) %>%
+  ungroup() %>%
+  mutate(facet_label = glue::glue("{response} {model} model false positives"))
+
+select_misclassifications <- bind_rows(extreme_false_negatives, 
+                                       extreme_false_positives)
 
 simulated_timecourses %>%
-  semi_join(tricky_tcs, by = "tc_id") %>%
-  ggplot(aes(x = time, color = as.character(tc_id))) +
+  inner_join(select_misclassifications, by = "tc_id") %>%
+  ggplot(aes(x = time, color = label)) +
   geom_path(aes(y = sim_fit)) +
   geom_point(aes(y = abundance)) +
-  facet_wrap(~ signal, ncol = 1, scale = "free_y") +
+  facet_wrap( ~ facet_label, scale = "free_y") +
   scale_y_continuous("Abundance") +
   scale_color_brewer("Example Timecourse", palette = "Set2") +
   ggtitle("Timecourses missed by GAM", "line: true values, points: observed values") +
@@ -172,9 +248,40 @@ simulated_timecourses %>%
 ```
 
 
+```{r}
+false_positive_foldchanges <- simulated_timecourses %>%
+  inner_join(select_misclassifications, by = "tc_id") %>%
+  filter(response == "foldchange")
 
+false_positive_foldchanges %>%
+  ggplot(aes(x = time, y = fold_change, color = label)) +
+  geom_point() +
+  geom_hline(data = false_positive_foldchanges %>%
+               filter(time != 0) %>%
+               group_by(label, facet_label) %>%
+               summarize(average_fold_change = mean(fold_change)),
+             aes(yintercept = average_fold_change, color = label), size = 2) +
+  facet_wrap(~ facet_label) +
+  scale_color_brewer("Example Timecourse", palette = "Set2")
+```
 
+From this we can say a few things:
 
+- When working with abundances we need to include an intercept term so the average value of a feature can be separated from its change over time. Doing this however can remove some early responses since the intercept becomes the point of reference rather than the value at time zero.
+
+- Changes which are showing up primarily in one or two timepoints might be missed since the polynomial and gam models used above can't contort themselves to fit these dynamics. This might be appropriate if these points were just noise but in many cases these are large changes beyond what we would expect as noise in our generative process.
+
+- Working with fold change enforces the value at time zero as the appropriate reference. This makes conceptual sense for a perturbation timecourse since at time zero (and before) the system is in a reference state, and all subsequent timepoints capture the dynamics of interest. However, working directly with fold-changes creates a problem. We are no longer controlling the FDR! In this simulation if we wanted to find discoveries at a 10% FDR than we would in fact be realizing a 60% FDR. This is a big problem, especially since outside of working in a simulation, we don't know which timecourses contain real signal and which are spurious (if that was the case then why would we do the experiment...), so we would would think there were strong signals in our dataset when it may in fact entirely be noise. 
+
+If we wanted to get around these issues, then we could still probably make a regression model work, but it would require adding more samples and cost to the analysis. The two main paths we could take are:
+
+- *replicates of each timecourse* - if we had multiple biological replicates at each timepoint, than rather than treating time as a numerical variable, we could treat it as a categorical variable. In this case we could fit an ANOVA model which would assess whether the variation between timepoints is greater than the variation within timepoints. This would be a powerful way of detecting differences across time which is agnostic to types of changes occurring.
+
+- *denser sampling* - if we had more measurements near timepoints where rapid dynamics were occuring then it would be easier to distinguish smooth rapid responses from single outlier observations. This would still require us to fit a model which can appropriately capture such dynamics, but with more observations we could either fit a more flexible model (with more degrees of freedom) or use the same simple models but with more power to detect significant changes.
+
+In most cases, I think adopting one of these options is probably the smart way to go, however there are reasons why collecting more samples in a given experiment is not feasible such as if MANY similar experiments are being performed, like in IDEA, or if there are constraints on how frequently samples can be collected.
+
+In such cases, I think we can find a path forward by stepping away from regression and thinking about likelihood-based methods which capture the nature of fold changes.
 
 ## Timecourse level significance
 
