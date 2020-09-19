@@ -11,6 +11,8 @@ knitr::opts_chunk$set(echo = TRUE)
 
 ## Intro
 
+
+
 Timecourses are one of the most powerful experimental designs in biology 
 
 because both the rapid and gradual responses 
@@ -20,19 +22,41 @@ I'll use genes as short-hand for whatever features that we might be working with
 Most timecourse experiments 
 
 
+
+
+In this article, I'll evaluate a few established methods for identifying genes which vary across time and then introduce an alternative approach based on the Multivariate Gaussian distribution and Mahalanobis distance. This will lead into future articles focusing on cleaning-up and characterizing the dynamics of genes which vary across time.
+
 ## Our timecourse experiment
 
+To evaluate methods for detecting temporal dynamics its helpful to use a dataset where there a clear-cut examples of timecourses with and without signal. With such a dataset in hand, we can easily detect signals that we are missing (false negatives), noise that we think is real (false positives) and evaluate overall recall (what fraction of signals are we detecting). We rarely have such positive and negative examples in real timecourses, so instead we can simulate timecourses with and without signal.
+
+### Environment Setup
+
+First, I'm going to setup the R environment by loading some bread-and-butter packages and setting the global options for future and ggplot2.
+
 ```{r env_setup}
+# general use packages
 library(dplyr)
+library(future)
 library(ggplot2)
 library(tidyr)
 
-library(future)
-plan("multicore")
-
 # global options
+# setup parallelization
+plan("multicore")
+# ggplot default theme
 theme_set(theme_bw())
 ```
+
+### Simulate timecourses containing signal
+
+First, we can generate the subset of our timecourses which contain signal. These timecourses should follow a broad range of biologically-feasible patterns. 
+
+To construct such timecourses, we can use the phenomonological timecourse model of Chechik & Koller which represents timecourses as a pair of sigmoidal responses, called an impulse, We'll also use a simpler single sigmoidal version of the C & K model. 
+
+To simulate data from these models, we can use the simulate_timecourses() function from the impulse R package, available on GitHub.
+
+This function will draw a set of parameters for sigmoidal and impulse from appropriate distributions to define a simulated timecourse. We'll then add independent normally distributed noise to each observation. (For most genomic data types, measurements are log-normal so we could think of these abundance units as already having been log-transformed).
 
 ```{r simulate_timecourses}
 timepts <- c(0, 5, 10, 20, 30, 40, 60, 90) # time points measured
@@ -74,6 +98,14 @@ alt_timecourses <- alt_timecourses %>%
 knitr::kable(alt_timecourses %>% slice(1:length(timepts)))
 ```
 
+### Simulate timecourses which are just noise
+
+Timecourses which are just noise are easy to generate, we can just generate these using independent draws from a normal distribution (with the same standard deviation that we used to add noise to the signals).
+
+With timecourses with and without signals in hand, we can combine the two sets together while tracking their origin.
+
+Additionally since we are interested in time-dependent changes with respect to time zero, we can transform abundances into fold changes which subtract the initial value of a timecourse from every measurement. We'll work with both the native abundance scale and time-zero normalized fold changes going forward.
+
 ```{r null_timecourses}
 null_timecourses <- crossing(tc_id = seq(max(alt_timecourses$tc_id) + 1, total_measurements),
                 time = timepts) %>%
@@ -88,6 +120,7 @@ simulated_timecourses <- bind_rows(alt_timecourses, null_timecourses) %>%
   ungroup()
 ```
 
+### Example timecourses 
 
 ```{r timecourse_examples}
 example_tcs <- simulated_timecourses %>%
@@ -247,24 +280,6 @@ simulated_timecourses %>%
   theme(legend.position = "bottom")
 ```
 
-
-```{r}
-false_positive_foldchanges <- simulated_timecourses %>%
-  inner_join(select_misclassifications, by = "tc_id") %>%
-  filter(response == "foldchange")
-
-false_positive_foldchanges %>%
-  ggplot(aes(x = time, y = fold_change, color = label)) +
-  geom_point() +
-  geom_hline(data = false_positive_foldchanges %>%
-               filter(time != 0) %>%
-               group_by(label, facet_label) %>%
-               summarize(average_fold_change = mean(fold_change)),
-             aes(yintercept = average_fold_change, color = label), size = 2) +
-  facet_wrap(~ facet_label) +
-  scale_color_brewer("Example Timecourse", palette = "Set2")
-```
-
 From this we can say a few things:
 
 - When working with abundances we need to include an intercept term so the average value of a feature can be separated from its change over time. Doing this however can remove some early responses since the intercept becomes the point of reference rather than the value at time zero.
@@ -283,40 +298,52 @@ In most cases, I think adopting one of these options is probably the smart way t
 
 In such cases, I think we can find a path forward by stepping away from regression and thinking about likelihood-based methods which capture the nature of fold changes.
 
-## Timecourse level significance
+## Timecourse fold change likelihood
 
-If we want to test whether full timecourses are explainable by timecourse level noise then it is useful to simulate data which mimimics such timecourses. In such timecourses, observations are drawn from independent log-normals and the log fold changes of later timepoints are found relative to time zero (i.e. $log_2f_{t} = \log_2x_t - \log_2x_1)$)
+Before we posit an appropriate likelihood for fold change, lets figure out why the regression approaches using fold change were so anticonservative. The big problem here was that many timecourses which were just noise looked like they actually contained signal. So, lets work with just the "no signal" timecourses.
 
+```{r corr_vs_tzero}
+timecourse_spread <- simulated_timecourses %>%
+  filter(signal == "no signal") %>%
+  group_by(tc_id) %>%
+  mutate(tzero_value = abundance[time == 0]) %>%
+  ungroup() %>%
+  filter(fold_change != 0) %>%
+  select(tc_id, time, tzero_value, fold_change) %>%
+  spread(time, fold_change)
 
-
-```{r fig.height = 10, fig.width = 10}
-n <- 20000
-timepts <- 8
-timecourses <- expand.grid(feature = 1:n, time = 1:timepts, stringsAsFactors = FALSE) %>%
-  dplyr::mutate(value = rnorm(n())) %>%
-  dplyr::group_by(feature) %>%
-  dplyr::mutate(tzero_value = value[time == 1]) %>%
-  dplyr::mutate(tzero_diff = value - tzero_value) %>%
-  dplyr::filter(time != 1)
-timecourse_split <- timecourses %>%
-  dplyr::filter(time %in% c(2:timepts)) %>%
-  dplyr::select(feature, time, tzero_value, tzero_diff) %>%
-  tidyr::spread(time, tzero_diff)
-knitr::kable(head(timecourse_split,10))
-
-ggplot(timecourse_split, aes(x = `2`, y = `3`, color = tzero_value)) + geom_point() +
-  scale_color_gradient2('Time zero value', low = "GREEN", high = "RED", mid = "BLACK", midpoint = 0, breaks = -4:4, limits = c(-4,4)) +
-  coord_cartesian(xlim = c(-5,5), ylim = c(-5,5)) +
+ggplot(timecourse_spread, aes(x = `5`, y = `10`, color = tzero_value)) + geom_point() +
+  scale_color_gradient2('Time zero value', low = "GREEN", high = "RED", mid = "BLACK", midpoint = 0, breaks = -2:2, limits = c(-2,2)) +
+  coord_cartesian(xlim = c(-2,2), ylim = c(-2,2)) +
   theme_minimal()
+```
+
+```{r}
+false_positive_foldchanges <- simulated_timecourses %>%
+  inner_join(select_misclassifications, by = "tc_id") %>%
+  filter(response == "foldchange")
+
+false_positive_foldchanges %>%
+  ggplot(aes(x = time, y = fold_change, color = label)) +
+  geom_point() +
+  geom_hline(data = false_positive_foldchanges %>%
+               filter(time != 0) %>%
+               group_by(label, facet_label) %>%
+               summarize(average_fold_change = mean(fold_change)),
+             aes(yintercept = average_fold_change, color = label), size = 2) +
+  facet_wrap(~ facet_label) +
+  scale_color_brewer("Example Timecourse", palette = "Set2")
 ```
 
 Based on the value of time zero, which all subsequent time points are normalized with respect to, these later timepoints are biased such that they are all higher or lower than otherwise expected. Because of the time zero normalization, in order to test for timecourse-level signal based on the aggregate signal of all observations, we need to account for the dependence of these observations. Luckily, the form of this dependence is quite straight-forward.
 
+We can see this dependence in the sample covariance matrix
+
 ```{r}
-cov(timecourse_split[,3:(timepts+1)])
+cov(timecourse_spread[,3:ncol(timecourse_spread)])
 ```
 
-Observations variances are $2\text{Var}(\log_2x_t)$ because $\mathcal{N}(\mu_{A}, \sigma^{2}_{A}) - \mathcal{N}(\mu_{B}, \sigma^{2}_{B}) = \mathcal{N}(\mu_{A} - \mu_{B}, \sigma^{2}_{A} + \sigma^{2}_{B})$. Observation covariances are $\text{Var}(\log_2x_t)$ because of the shared normalization to time zero.
+Observations variances are approximately $2\text{Var}(x_t)$ (2 * `r measurement_sd`) because $\mathcal{N}(\mu_{A}, \sigma^{2}_{A}) - \mathcal{N}(\mu_{B}, \sigma^{2}_{B}) = \mathcal{N}(\mu_{A} - \mu_{B}, \sigma^{2}_{A} + \sigma^{2}_{B})$. Observation covariances are $\text{Var}(\log_2x_t)$ because of the shared normalization to time zero.
 
 Normalization of Normal (or log-Normal) observations to a common reference produces a Multivariate Normal distribution.
 
