@@ -1,5 +1,5 @@
 ---
-title: "timecourse_shrinkage"
+title: "Timecourse Shrinkage with functional FDR"
 author: "Sean Hackett"
 date: "9/17/2020"
 output: html_document
@@ -9,44 +9,61 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
+In my last post, I discussed regression and likelihood-based methods for detecting temporal dynamics in timecourse data. These experiments typically involve perturbing a steady-state system at "time zero" and then measuring how the system changes at subsequent time points.
+
+When working with such data I find that its useful to separate modeling into two phases. The first goal is to detect timecourses containing signal using statistical methods (the subject of **post**). Once this has been accomplished, we can proceed to characterize these signals using a wider array of methods (signal processing, mechanistic models, phenomonological models, stats/ML).
+
+
+```{r}
+library(dplyr)
+library(ggplot2)
+library(tidyr)
+
+# ggplot default theme
+theme_set(theme_bw())
+```
+
+```{r create_timecourse_dataset}
+timepts <- c(0, 5, 10, 20, 30, 40, 60, 90) # time points measured
+measurement_sd <- 0.5 # standard deviation of Gaussian noise added to each observation
+
+# simulate timecourses from Chechik & Koller impulse model
+devtools::source_gist("https://gist.github.com/shackett/e4a1a9b930623580282cd64d33a802c4")
+
+simulated_timecourses <- simulated_timecourses %>%
+  filter(signal == "contains signal")
+```
+
+```{r}
+example_tcs <- simulated_timecourses %>%
+  distinct(tc_id) %>%
+  sample_n(5) %>%
+  mutate(label = as.character(1:n()))
+
+simulated_timecourses %>%
+  inner_join(example_tcs, by = "tc_id") %>%
+  ggplot(aes(x = time, color = label)) +
+  geom_path(aes(y = sim_fit)) +
+  geom_point(aes(y = abundance)) +
+  scale_y_continuous("Abundance") +
+  scale_color_brewer("Example Timecourse", palette = "Set2") +
+  ggtitle("Simulated timecourses containing signal", "line: true values, points: observed values") +
+  theme(legend.position = "bottom")
+```
+
+
+
+
 # estimate the FDR for significant timecourses
 
-```{r timecourse_significance}
-plot(qvalue::qvalue(multivariate_normal_tc_signif$p_multivariate_normal))
-```
-
-```{r timecourse_significance_by_experiment}
-set.seed(1234)
-
-n_experiments <- multivariate_normal_tc_signif %>%
-  dplyr::distinct(TF, strain, date, restriction, mechanism) %>%
-  dplyr::sample_n(8)
-
-ggplot(multivariate_normal_tc_signif %>%
-  dplyr::semi_join(n_experiments, by = c("TF", "strain", "date", "restriction", "mechanism")), aes(x = p_multivariate_normal, y = ..density..)) +
-  geom_histogram() +
-  facet_wrap(~ TF + strain + date + mechanism, ncol = 4)
-```
 
 ```{r timecourse_filtering}
-#overall_timecourse_signal <- multivariate_normal_tc_signif %>%
-#  dplyr::ungroup() %>%
-#  dplyr::mutate(q_chisq = p.adjust(p_multivariate_normal, method = "BH")) %>%
-  #dplyr::filter(q_chisq < 0.0001)
-#  dplyr::filter(q_chisq < 0.001)
-overall_timecourse_signal <- multivariate_normal_tc_signif %>%
-  dplyr::group_by(TF, strain, date, restriction, mechanism) %>%
-  dplyr::mutate(q_chisq = p.adjust(p_multivariate_normal, method = "BH")) %>%
-  dplyr::ungroup() %>%
-  dplyr::filter(q_chisq < 0.001)
+
 # Using non-centered z-statics generated from log-fold change and gene + timecourse noise estimate the local false discovery rate (lfdr) of individual observations
-observation_signals <- cleaned_dataset %>%
-  dplyr::semi_join(overall_timecourse_signal, by = c("TF", "strain", "date", "restriction", "mechanism", "gene")) %>%
+observation_signals <- simulated_timecourses %>%
   # hold out measurement that are exactly zero since they are zero by construction
-  dplyr::filter(log2_ratio != 0) %>%
-  dplyr::left_join(noise_model$gene_noise, by = "gene") %>%
-  dplyr::left_join(noise_model$timecourse_noise, by = c("TF", "strain", "date", "restriction", "mechanism")) %>%
-  dplyr::mutate(z_score = log2_ratio / sqrt(gene_var + tc_var)) %>%
+  dplyr::filter(fold_change != 0) %>%
+  dplyr::mutate(z_score = fold_change / sqrt(2*measurement_sd^2)) %>%
   dplyr::mutate(p_norm = 1 - abs(0.5 - pnorm(z_score))*2)
   
 ggplot(observation_signals, aes(x = p_norm, y = ..density..)) +
@@ -55,14 +72,14 @@ ggplot(observation_signals, aes(x = p_norm, y = ..density..)) +
   ggtitle("Within significant timecourses, early timepoints are generally noise; later timepoints, generally are signal")
 ```
 
+
 ```{r observation_level_fdr}
-#Calculate lfdr treating pi as a a monotonic fxn of t : functional false discovery rate testing
-# add functions for calculating pi_0 as a monotonic fxn of a power surrogate (here t).
-# this functionality will soon be added to the qvalue function
-source("~/Desktop/shackett/expression_dynamics/code/R/estimate_fpi0.R")
-# calculate pi_0 for each time point
-library(qvalue)
-pi_zero_by_t <- estimate_fpi0(p = observation_signals$p_norm, z0 = observation_signals$time)$table %>%
+library(fFDR)
+
+fq <- fqvalue(observation_signals$p_norm, observation_signals$time)
+
+pi_zero_by_t <- estimate_fpi0(p = observation_signals$p_norm,
+                              z0 = observation_signals$time)$table %>%
   dplyr::distinct(z0, fpi0) %>%
   dplyr::group_by(z0) %>%
   dplyr::slice(1) %>%
