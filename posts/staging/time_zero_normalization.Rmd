@@ -61,7 +61,7 @@ This function will draw a set of parameters for sigmoidal and impulse from appro
 ```{r simulate_timecourses}
 timepts <- c(0, 5, 10, 20, 30, 40, 60, 90) # time points measured
 measurement_sd <- 0.5 # standard deviation of Gaussian noise added to each observation
-total_measurements <- 1000 # total number of genes
+total_measurements <- 10000 # total number of genes
 signal_frac <- 0.2 # what fraction of genes contain real signal
 
 set.seed(1234)
@@ -107,8 +107,9 @@ With timecourses with and without signals in hand, we can combine the two sets t
 Additionally since we are interested in time-dependent changes with respect to time zero, we can transform abundances into fold changes which subtract the initial value of a timecourse from every measurement. We'll work with both the native abundance scale and time-zero normalized fold changes going forward.
 
 ```{r null_timecourses}
-null_timecourses <- crossing(tc_id = seq(max(alt_timecourses$tc_id) + 1, total_measurements),
-                time = timepts) %>%
+null_timecourses <- crossing(tc_id = seq(max(alt_timecourses$tc_id) + 1,
+                                         max(alt_timecourses$tc_id) + total_measurements * (1-signal_frac)),
+                             time = timepts) %>%
   mutate(signal = "no signal",
          sim_fit = 0,
          abundance = rnorm(n(), 0, measurement_sd))
@@ -300,7 +301,23 @@ In such cases, I think we can find a path forward by stepping away from regressi
 
 ## Timecourse fold change likelihood
 
+Using likelihood methods, we start with a statistical model for how our observations were generated. We can then sample or optimize the parameters of this model in order to find the most likely value (i.e., the frequentist MLE) or generate a distribution of parameters incorporating both likelihood and parameter plausibility (i.e., the Bayesian approach).
+
+We can then compare whether 
+
+
+
+
+
+To gain intuition on what form this
+
+
+
+
+
 Before we posit an appropriate likelihood for fold change, lets figure out why the regression approaches using fold change were so anticonservative. The big problem here was that many timecourses which were just noise looked like they actually contained signal. So, lets work with just the "no signal" timecourses.
+
+To do this, we can look at how the value at time zero influences fold-change estimates of later timepoints.
 
 ```{r corr_vs_tzero}
 timecourse_spread <- simulated_timecourses %>%
@@ -314,30 +331,24 @@ timecourse_spread <- simulated_timecourses %>%
 
 ggplot(timecourse_spread, aes(x = `5`, y = `10`, color = tzero_value)) + geom_point() +
   scale_color_gradient2('Time zero value', low = "GREEN", high = "RED", mid = "BLACK", midpoint = 0, breaks = -2:2, limits = c(-2,2)) +
+  scale_x_continuous("Fold change at 5 minutes") +
+  scale_y_continuous("Fold change at 10 minutes") +
   coord_cartesian(xlim = c(-2,2), ylim = c(-2,2)) +
   theme_minimal()
 ```
 
-```{r}
-false_positive_foldchanges <- simulated_timecourses %>%
-  inner_join(select_misclassifications, by = "tc_id") %>%
-  filter(response == "foldchange")
+From this plot, a large positive value at time zero (due to noise) results in later timepoints appearing as consistent negative fold changes. Conversely, if the time zero value is negative then later timepoints appear consistently positive.
 
-false_positive_foldchanges %>%
-  ggplot(aes(x = time, y = fold_change, color = label)) +
-  geom_point() +
-  geom_hline(data = false_positive_foldchanges %>%
-               filter(time != 0) %>%
-               group_by(label, facet_label) %>%
-               summarize(average_fold_change = mean(fold_change)),
-             aes(yintercept = average_fold_change, color = label), size = 2) +
-  facet_wrap(~ facet_label) +
-  scale_color_brewer("Example Timecourse", palette = "Set2")
-```
+While we simulated abundances as independent Normal draws which would possess a spherical covariance structure, normalizing to time zero has induced a correlation between observations and this dependence will need to be accounted for in order to properly.
 
-Based on the value of time zero, which all subsequent time points are normalized with respect to, these later timepoints are biased such that they are all higher or lower than otherwise expected. Because of the time zero normalization, in order to test for timecourse-level signal based on the aggregate signal of all observations, we need to account for the dependence of these observations. Luckily, the form of this dependence is quite straight-forward.
 
-We can see this dependence in the sample covariance matrix
+
+
+Based on the value of time zero, which all subsequent time points are normalized with respect to, these later timepoints are biased such that they are all higher or lower than otherwise expected. 
+
+Because of the time zero normalization, in order to test for timecourse-level signal based on the aggregate signal of all observations, we need to account for the dependence of these observations. Luckily, the form of this dependence is quite straight-forward.
+
+We can see this dependence using the sample covariance matrix of our null timecourses.
 
 ```{r}
 cov(timecourse_spread[,3:ncol(timecourse_spread)])
@@ -348,132 +359,73 @@ Observations variances are approximately $2\text{Var}(x_t)$ (2 * `r measurement_
 Normalization of Normal (or log-Normal) observations to a common reference produces a Multivariate Normal distribution.
 
 $$
-z_{it} = \frac{f_{it}}{\sigma_{i}^{(f)}}
-$$
-
-$$
-\mathbf{z}_{iT} \sim \mathcal{MN}\left(\mu = \mathbf{0}, \Sigma = 
+\mathbf{f}_{i} \sim \mathcal{MN}\left(\mu = \mathbf{0}, \Sigma = 
 \begin{bmatrix}
-    1 & 0.5 & \dots  & 0.5 \\
-    0.5 & 1 & \dots  & 0.5 \\
+    2\sigma_{\epsilon}^2 & \sigma_{\epsilon}^2 & \dots  & \sigma_{\epsilon}^2 \\
+    \sigma_{\epsilon}^2 & 2\sigma_{\epsilon}^2 & \dots  & \sigma_{\epsilon}^2 \\
     \vdots & \vdots & \ddots & \vdots \\
-    0.5 & 0.5 & \dots  & 1
+    \sigma_{\epsilon}^2 & \sigma_{\epsilon}^2 & \dots  & 2\sigma_{\epsilon}^2
 \end{bmatrix}\right)
 $$
 
 ```{r}
-timecourse_covariance <- matrix(1, nrow = timepts-1, ncol = timepts-1)
-diag(timecourse_covariance) <- 2
-# simultate draws from multivariate normal
+timecourse_covariance <- matrix(measurement_sd^2, nrow = length(timepts)-1, ncol = length(timepts)-1)
+diag(timecourse_covariance) <- 2*measurement_sd^2
+
+n_fold_changes = ncol(timecourse_covariance)
+
+# simulate draws from multivariate normal
 library(mvtnorm)
 r_multivariate_normal <- rmvt(10000, sigma = timecourse_covariance, df = 0)
-r_multivariate_pvalues <- sapply(1:nrow(r_multivariate_normal), function(i){
-  pmvt(lower=rep(-Inf,ncol(r_multivariate_normal)), upper=r_multivariate_normal[i,], sigma = timecourse_covariance, df = 0)
-})
-r_multivariate_mahalanobis_dist <- mahalanobis(r_multivariate_normal, center = rep(0, times = ncol(timecourse_covariance)), cov = timecourse_covariance, inverted = FALSE)
+
+r_multivariate_mahalanobis_dist <- mahalanobis(r_multivariate_normal,
+                                               center = rep(0, times = n_fold_changes),
+                                               cov = timecourse_covariance,
+                                               inverted = FALSE)
+
 # test multivariate normality
-hist(pchisq(r_multivariate_mahalanobis_dist, df = ncol(timecourse_covariance)), breaks = 50)
+hist(pchisq(r_multivariate_mahalanobis_dist, df = n_fold_changes, lower.tail = FALSE), breaks = 50)
+
 # test timecourse samples for multivariate normality
-time_course_mahalanobis_dist <- mahalanobis(timecourse_split[,-c(1:2)], center = rep(0, ncol(timecourse_covariance)), cov = timecourse_covariance)
-hist(pchisq(time_course_mahalanobis_dist, df = ncol(timecourse_covariance)), breaks = 50)
-```
-
-## This test is rather affected by single observation outliers -- we can try calculating distance when holding out different time points
-
-What to do if time zero is the bad array?
-
-```{r eval = FALSE}
-timecourses_bad_array <- timecourses %>%
-  # add strong batch effect in one time point
-  dplyr::mutate(tzero_diff = ifelse(time == 2, tzero_diff + rnorm(n(), 0, 3), tzero_diff)) %>%
-  dplyr::ungroup() %>%
-  dplyr::filter(time %in% c(2:timepts)) %>%
-  dplyr::select(feature, time, tzero_value, tzero_diff)
-time_course_mahalanobis_dist_bad_array <- mahalanobis((timecourses_bad_array %>%
-  tidyr::spread(time, tzero_diff))[,-c(1:2)], center = rep(0, ncol(timecourse_covariance)), cov = timecourse_covariance)
-hist(pchisq(time_course_mahalanobis_dist_bad_array, df = ncol(timecourse_covariance), lower.tail = FALSE), breaks = 50)
-held_out_times <- expand.grid(held_out_t = 2:timepts, nonzero_time = 2:timepts, stringsAsFactors = FALSE) %>%
-    dplyr::filter(nonzero_time != held_out_t) %>%
-    dplyr::left_join(timecourses_bad_array, by = c("nonzero_time" = "time")) %>%
-    dplyr::group_by(held_out_t, feature) %>%
-    dplyr::mutate(nonzero_time_order = 1:n()) %>%
-    dplyr::select(-nonzero_time) %>%
-    tidyr::spread(nonzero_time_order, tzero_diff)
-held_out_times <- held_out_times %>%
-  dplyr::ungroup() %>%
-  dplyr::mutate(mahalanobis_d = mahalanobis(held_out_times[4:9], center = rep(0, timepts-2), cov = timecourse_covariance[1:(timepts-2), 1:(timepts-2)])) %>%
-  dplyr::group_by(feature) %>%
-  dplyr::arrange(feature, mahalanobis_d) %>%
-  dplyr::slice(1) %>%
-  dplyr::ungroup() %>%
-  dplyr::mutate(mahalanobis_p = pchisq(mahalanobis_d, df = timepts-2, lower.tail = FALSE))
-hist(held_out_times$mahalanobis_p, breaks = 50)
-```
-
-## Load dataset and timecourse-level noise estimates (any estimate of a timecourse's noise can be plugged in)
-
-```{r}
-library(dynamicyeast)
-suppressPackageStartupMessages(library(dplyr))
-library(qvalue)
-library(ggplot2)
-source("../code/R/2_component_noise.R")
-cleaned_dataset <- dynamicyeast::format_expression_data("~/Google Drive/transcription_dynamics/per_time_clean_interp.tsv", is_log_ratio = TRUE)
-noise_model <- estimate_gene_fc_noise(cleaned_dataset,
-                                     step_fraction = 0.1,
-                                     quantile_range_val = 0.95,
-                                     n_timepts = 4,
-                                     iter_num = 200)
+time_course_mahalanobis_dist <- mahalanobis(timecourse_spread[,-c(1:2)], center = rep(0, n_fold_changes), cov = timecourse_covariance)
+hist(pchisq(time_course_mahalanobis_dist, df = n_fold_changes, lower.tail = FALSE), breaks = 50)
 ```
 
 ```{r}
-standardized_fold_changes <- cleaned_dataset %>%
-  dplyr::filter(log2_ratio != 0) %>%
-  dplyr::left_join(noise_model$gene_noise, by = "gene") %>%
-  dplyr::left_join(noise_model$timecourse_noise, by = c("TF", "strain", "date", "restriction", "mechanism")) %>%
-  # calculate a z-score for each observation using its gene-level standard deviation
-  dplyr::mutate(z_score_fc = log2_ratio / sqrt(gene_var + tc_var)) %>%
-  # split timecourses up based on number of timepoints since all timecourse z-scores with the same n will follow the same null distribution
-  dplyr::group_by(TF, strain, date, restriction, mechanism, gene) %>%
-  dplyr::mutate(nonzero_time_order = 1:n(),
-                n_times = n()) %>%
-  dplyr::ungroup() %>%
-  dplyr::select(-time, -ratio, -log2_ratio, -gene_var, -tc_var) %>%
-  plyr::dlply(.variables = "n_times", dplyr::tbl_df)
-multivariate_normal_tc_signif <- parallel::mclapply(standardized_fold_changes, function(a_times_set) {
-  
-  n_times <- a_times_set$n_times[1]
-  
-  timecourse_spread <- a_times_set %>%
-    dplyr::select(-n_times) %>%
-    tidyr::spread(nonzero_time_order, z_score_fc)
-  
-  # pull out time component and test calculate mahalanobis distance
-  
-  timecourse_matrix <- timecourse_spread %>%
-    dplyr::select(-c(TF, strain, date, restriction, mechanism, gene)) %>%
-    as.matrix()
-  
-  tc_sigma <- matrix(0.5, nrow = n_times, ncol = n_times)
-  diag(tc_sigma) <- 1
-  
-  #full_tc_mahalanobis_d <- mahalanobis(timecourse_matrix, center = rep(0, times = n_times), cov = tc_sigma)
-  
-  # hold out each datapoint seperately and take the minimum distance (check for examples where distance is driven by 1 point)
-  
-  # generate all timecourses of n-1 size
-  #expand.grid(held_out_t = 1:n_times, nonzero_time_order = 1:n_times, stringsAsFactors = FALSE) %>%
-  #  dplyr::filter(nonzero_time_order != held_out_t) %>%
-  #  dplyr::left_join(a_times_set, by = "nonzero_time_order") %>%
-  #  dplyr::group_by(TF, strain, date, restriction, mechanism, gene) %>%
-  #  dplyr::mutate(nonzero_time_order = 1:n()) %>%
-  #  tidyr::spread(nonzero_time_order, z_score_fc)
-  
-  timecourse_spread %>%
-    dplyr::select(TF, strain, date, restriction, mechanism, gene) %>%
-    dplyr::mutate(mahalanobis_d = mahalanobis(timecourse_matrix, center = rep(0, times = n_times), cov = tc_sigma),
-                  p_multivariate_normal = pchisq(mahalanobis_d, df = n_times, lower.tail = FALSE))
-}, mc.cores = 4) %>%
-  dplyr::bind_rows()
-  
-hist(multivariate_normal_tc_signif$p_multivariate_normal, breaks = 100)
+timecourse_mvn <- simulated_timecourses %>%
+  group_by(tc_id) %>%
+  mutate(tzero_value = abundance[time == 0]) %>%
+  ungroup() %>%
+  filter(fold_change != 0) %>%
+  select(tc_id, time, tzero_value, fold_change) %>%
+  spread(time, fold_change) %>%
+  mutate(mahalanobis_dist = mahalanobis(.[,-c(1:2)],
+                                        center = rep(0, n_fold_changes),
+                                        cov = timecourse_covariance),
+         pvalue = pchisq(mahalanobis_dist, df = n_fold_changes, lower.tail = FALSE),
+         qvalue = fdr_control(pvalue),
+         discovery = ifelse(qvalue < 0.1, "positive", "negative")) %>%
+  left_join(simulated_timecourses %>%
+              distinct(tc_id, signal),
+            by = "tc_id")
+
+timecourse_mvn %>%
+  ggplot(aes(x = pvalue, fill = signal)) +
+  geom_histogram(bins = 100) +
+  scale_fill_brewer(palette = "Set1")
+```
+
+
+```{r}
+timecourse_mvn %>%
+  count(signal, discovery) %>%
+  mutate(correct = case_when(signal == "no signal" & discovery == "negative" ~ "true negative",
+                             signal == "no signal" & discovery == "positive" ~ "false positive",
+                             signal == "contains signal" & discovery == "negative" ~ "false negative",
+                             signal == "contains signal" & discovery == "positive" ~ "true positive")) %>%
+  select(correct, n) %>%
+  spread(correct, n) %>%
+  mutate(fdr = `false positive` / (`false positive` + `true positive`),
+         recall = `true positive` / (`false negative` + `true positive`)) %>%
+  knitr::kable()
+```

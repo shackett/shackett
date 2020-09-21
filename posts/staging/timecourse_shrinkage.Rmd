@@ -17,9 +17,11 @@ plot(qvalue::qvalue(multivariate_normal_tc_signif$p_multivariate_normal))
 
 ```{r timecourse_significance_by_experiment}
 set.seed(1234)
+
 n_experiments <- multivariate_normal_tc_signif %>%
   dplyr::distinct(TF, strain, date, restriction, mechanism) %>%
   dplyr::sample_n(8)
+
 ggplot(multivariate_normal_tc_signif %>%
   dplyr::semi_join(n_experiments, by = c("TF", "strain", "date", "restriction", "mechanism")), aes(x = p_multivariate_normal, y = ..density..)) +
   geom_histogram() +
