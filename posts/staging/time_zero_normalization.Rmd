@@ -1,7 +1,7 @@
 ---
 title: "Time zero normalization with the Multivariate Gaussian distribution"
 author: "Sean Hackett"
-date: "9/17/2020"
+date: "1/14/2021"
 output: html_document
 ---
 
@@ -11,24 +11,15 @@ knitr::opts_chunk$set(echo = TRUE)
 
 ## Intro
 
+Timecourses can be a powerful experimental design for evaluating the impact of a perturbation. These perturbations are usually chemicals because chemicals, such as a drug, can be introduced quickly and with high temporal precision. Although, with some technologies, such as the estradiol-driven promoters that I used in the induction dynamics expression atlas ([IDEA](https://idea.research.calicolabs.com)), it is possible to rapidly perturb a single gene further increasing specificity and broadening appplicability. By rapidly perturbing individuals, they can be synchronized based on the time when dosing began. We often call this point when dosing begins "time zero" while all subsequent measurements correspond to the time post perturbation. (Since time zero corresponds to a point when a perturbation is applied, but will not yet impact the system, this measurement is usually taken before adding the perturbation.)
 
+One of the benefits of collecting a time zero measurement is it allows us to remove, or account for, effects that are shared among all time points. In many cases this may just amount to analyzing fold-changes of post-perturbation measurement with respect to their time zero observation, rather than the original measurements themselves. This can be useful if there is considerable variation among timecourses irrespective of the perturbation, such as if we were studying humans (or even mice). Similarly, undesirable variation due to day-to-day variation in instruments, sample stability, or any of the many other factors which could produce batch effects, can sometimes by addressed by measuring each timecourse together and working with fold-changes. In either case, correcting for individual effects using pre-perturbation measurements will increase our power to detect a perturbation's effects. 
 
-Timecourses are one of the most powerful experimental designs in biology 
-
-because both the rapid and gradual responses 
-
-I'll use genes as short-hand for whatever features that we might be working with since I've primarily worked with these methods in the context of gene expression data.
-
-Most timecourse experiments 
-
-
-
-
-In this article, I'll evaluate a few established methods for identifying genes which vary across time and then introduce an alternative approach based on the Multivariate Gaussian distribution and Mahalanobis distance. This will lead into future articles focusing on cleaning-up and characterizing the dynamics of genes which vary across time.
+Aside from correcting for unwanted variation, the kinetics of timecourses are a rich source of information which can be either a blessing or a curse. With temporal information, ephemeral responses can be observed. We can see both which features are changing and when they are changing. And, the ordering of events can point us towards causality. In practice, each of these goals can be difficult, or impossible to achieve, leaving us with a nagging feeling that we're leaving information on the table. There are many competing options for identifying differences in timecourses, few ways of summarizing dynamics in an intuitive way, and causal inference is often out of reach. In this post, and others to follow, I'll pick apart a few of these limitations, discussing developments that were applied to the IDEA, but will likely be useful for others thinking about biological timeseries analysis (or other timesries if you are so inclined!). Here, I evaluate a few established methods for identifying features which vary across time and then introduce an alternative approach based on the Multivariate Gaussian distribution and Mahalanobis distance which increases power and does not require any assumptions about responses' kinetics.
 
 ## Our timecourse experiment
 
-To evaluate methods for detecting temporal dynamics its helpful to use a dataset where there a clear-cut examples of timecourses with and without signal. With such a dataset in hand, we can easily detect signals that we are missing (false negatives), noise that we think is real (false positives) and evaluate overall recall (what fraction of signals are we detecting). We rarely have such positive and negative examples in real timecourses, so instead we can simulate timecourses with and without signal.
+To evaluate methods for detecting temporal dynamics its helpful to use a dataset where there a clear-cut examples of timecourses with and without signal. With such a dataset in hand, we can easily detect signals that we are missing (false negatives), noise that we think is real (false positives) and evaluate overall recall (what fraction of signals are we detecting). We rarely have such positive and negative examples in real timecourses, so instead we can simulate timecourses with and without signal. Going forward I will also use genes as short-hand for whatever features that we might be working with since I've primarily worked with these methods in the context of gene expression data.
 
 ### Environment Setup
 
@@ -144,6 +135,10 @@ simulated_timecourses %>%
 
 ## Models to try
 
+At this point, we want to fit a few flavors of time series models to each gene in order to determine how reliably each model can discriminate signal-containing and no-signal timecourses.
+
+To make it easy to iterate over features, I like to using the nest function from tidyr to store all the data for a feature in a single row. Here, expression data will be stored as a list of gene-level tables.
+
 ```{r}
 nested_timecourses <- simulated_timecourses %>%
   nest(timecourse_data = -c(signal, tc_id)) 
@@ -151,7 +146,24 @@ nested_timecourses <- simulated_timecourses %>%
 nested_timecourses
 ```
 
-### Linear, quadratic, cubic regression
+Having nested one-gene per row, we can apply multiple regression models to each gene, and we'll also do this treating both the fold-change and original expression level as responses to evaluate the effect of time zero normalization. The regression models that we'll try are:
+
+- linear effect of time on expression. From our sigmoid and impulse generate process, we shouldn't expect a linear relationship to work great, but it can serve as a nice baseline.
+- cubic relationship between time and expression. This fill fit a linear term, a quadratic ($t^2$) and a cubic ($t^3$) term to allow for more complicated dynamics such as genes that go up and then down again. One feature of cubic regression, or other polynomial regression models such as quadratic regression, is that they are zero-centric. What I mean by this is that additional terms in a polyomial regression models, such as moving from a cubic or a quardic model, allows for extra flexibily around zero. This can be helpful, but if changes are occurring at late timepoints, we may need a high degree polynomial to capture this change, and the cost will be a prediction which overfits to the noise in earlier timepoints.
+- predicting expression with a spline over timepoints using generalized additive models (GAMs). These models are similar to the cubic models but provide support evenly across time. This will allow them to detect late changes without requiring many degrees of freedom. GAMs are powerful models but they can run into problem when changes occur rapidly especially if we have relatively few timepoints.
+
+With these models our main goal is determine whether each timecourses contains dynamic signal rather than testing for the significance of individual parameters. Approaching the problem this way will also allow us to compare these different approaches even though they fit a different number of parameters. To summarize each model's prediction of the role of time, ANOVA can be used to determine how much variation is explained by time relative to the noise left over. Because cubic regression and GAMs fit more parameters they must do a better job of explaining the temporal dynamics to justify their extra degrees of freedom.
+
+There are many other approaches that we could try, a few of these are worth mentioning:
+
+- mgcv is an alternative implementation of GAMs to the gam package used below. It is able to decide how flexible of a spline should be fit to each gene using cross-validation. For our synthetic dataset, mgcv actually fails for a number of features owing to the complexity of our dynamics relative to the relatively small number of timepoints.
+- If we had replicates of timepoints then we could fit a model which treats each timepoint as a categorical variable. This would allow us detect dynamics without assuming that we expect certain patterns. The downside is that this would require us to collect twice as much data, or perhaps cut back on time points to provide repeated measures of the timepoints that we do have. In general, I think its better to have more unique timepoints represented even if we don't have repeated measures since this provides more even representation of measuremetns over the time period we care about.
+- Since time points are not evenly spaced we could have tried transforming time when fitting the above models. While the timepoints are "exponentially" sampled, taking log(time) would send time zero to -Inf so a better transformation would be using the square root of time as the independent variable.
+
+A couple of notes:
+
+- Since the time zero fold change must be zero by definition, I applied this as a constraint (this is the "+ 0" in the formulas below).
+- *future* was used to parallelize over genes; its settings were setup in the "environment setup" section.
 
 ```{r}
 library(broom)
@@ -198,17 +210,9 @@ standard_models <- nested_timecourses %>%
                                      model_formula = as.formula(fold_change ~ s(time) + 0)))
 ```
 
-Other models we could have tried.
-- mgcv
-- autocorrelation
+Each model x gene can be summarized by a single p-value. We expect the signal-containing timecourses to have relatively low p-values, while the no-signal timecourses' pvalues should be uniformly distributed between 0 and 1.
 
-- if we had replicates than a categorical model would make sense
-
-
-Since time points are not evenly spaced we could have tried transforming time when fitting the above models. While the timepoints are "exponentially" sampled, taking log(time) would send time zero to -Inf so a better transformation would be using the square root of time as the independent variable.
-
-
-
+To correct for multiple tests we can use the Storey q-value approach to control the false discovery rate (FDR). To do this we will estimate q-values separately for each model and select a q-value cutoff of 0.1 as a cutoff for significance. At this level we expect that 1/10 of genes with a q-value of less than 0.1 will be from the no-signal group.
 
 ```{r fdr_control}
 fdr_control <- function(pvalues) {
@@ -230,6 +234,10 @@ ggplot(all_model_fits, aes(x = p.value, fill = signal)) +
   scale_fill_brewer(palette = "Set1")
 ```
 
+Visually, there are a large number of no-signal timecourses with small p-values in the fold-change data. This suggests that something pathological is going on.
+
+We can also summarize models based on the FDR that was actually realized given that we were shooting for 0.1, and based on the total recall of signal-containing timecourses at the cutoff of 0.1
+
 ```{r}
 all_model_fits %>%
   count(signal, model, response, discovery) %>%
@@ -244,7 +252,9 @@ all_model_fits %>%
          recall = `true positive` / (`false negative` + `true positive`)) %>%
   knitr::kable()
 ```
+In this summary we can see that working with abundances does accurately control the FDR, but recall is low for linear and cubic regression and moderate for GAMs. Working with fold changes in contrast fails to control the FDR. While we intended for 1/10 of our discoveries to be null, around 60% actually are! While recall is pretty good, most of the kinetic responses will be garbage.
 
+To figure out what is going wrong, we can plot examples of false positives (model thinks there is signal when there isn't) and false negatives (model doesn't think there is signal when there really is).
 
 ```{r}
 extreme_false_negatives <- all_model_fits %>%
@@ -303,18 +313,6 @@ In such cases, I think we can find a path forward by stepping away from regressi
 
 Using likelihood methods, we start with a statistical model for how our observations were generated. We can then sample or optimize the parameters of this model in order to find the most likely value (i.e., the frequentist MLE) or generate a distribution of parameters incorporating both likelihood and parameter plausibility (i.e., the Bayesian approach).
 
-We can then compare whether 
-
-
-
-
-
-To gain intuition on what form this
-
-
-
-
-
 Before we posit an appropriate likelihood for fold change, lets figure out why the regression approaches using fold change were so anticonservative. The big problem here was that many timecourses which were just noise looked like they actually contained signal. So, lets work with just the "no signal" timecourses.
 
 To do this, we can look at how the value at time zero influences fold-change estimates of later timepoints.
@@ -339,14 +337,9 @@ ggplot(timecourse_spread, aes(x = `5`, y = `10`, color = tzero_value)) + geom_po
 
 From this plot, a large positive value at time zero (due to noise) results in later timepoints appearing as consistent negative fold changes. Conversely, if the time zero value is negative then later timepoints appear consistently positive.
 
-While we simulated abundances as independent Normal draws which would possess a spherical covariance structure, normalizing to time zero has induced a correlation between observations and this dependence will need to be accounted for in order to properly.
+While we simulated abundances as independent Normal draws which would possess a spherical covariance structure, normalizing to time zero has induced a correlation between observations and this dependence will need to be accounted for in order to have a useful null hypothesis.
 
-
-
-
-Based on the value of time zero, which all subsequent time points are normalized with respect to, these later timepoints are biased such that they are all higher or lower than otherwise expected. 
-
-Because of the time zero normalization, in order to test for timecourse-level signal based on the aggregate signal of all observations, we need to account for the dependence of these observations. Luckily, the form of this dependence is quite straight-forward.
+Based on the value of time zero, which all subsequent time points are normalized with respect to, these later timepoints are biased such that they are all higher or lower than otherwise expected.  In order to test for timecourse-level signal based on the aggregate signal of all observations, we need to account for the dependence of these observations. Luckily, the form of this dependence is quite straight-forward.
 
 We can see this dependence using the sample covariance matrix of our null timecourses.
 
@@ -368,6 +361,8 @@ $$
 \end{bmatrix}\right)
 $$
 
+If we expect null fold-change measurements to follow this distribution, then we can sample from a multivariate normal distribution to explore whether this works as a fold-change generative process. We can then assess whether these draws are likely to have come from this distribution as a null hypothesis. For this purpose, we'll use Mahalanobis distance, which is a multivariate generalization of the Wald test that assesses how many standard deviations an observation is from the mean of the distribution. This requires an estimate of the covariance matrix, an assumption that will be discussed below. We expect these statistics to be $\chi^{2}$ distributed with degrees of freedom equal to the number of timepoints that we have.
+
 ```{r}
 timecourse_covariance <- matrix(measurement_sd^2, nrow = length(timepts)-1, ncol = length(timepts)-1)
 diag(timecourse_covariance) <- 2*measurement_sd^2
@@ -384,12 +379,22 @@ r_multivariate_mahalanobis_dist <- mahalanobis(r_multivariate_normal,
                                                inverted = FALSE)
 
 # test multivariate normality
-hist(pchisq(r_multivariate_mahalanobis_dist, df = n_fold_changes, lower.tail = FALSE), breaks = 50)
+hist(pchisq(r_multivariate_mahalanobis_dist, df = n_fold_changes, lower.tail = FALSE), breaks = 50, main = "p-values for MN fold-change generative process")
+```
 
+Having taken draws from the Multivariate Gaussian distribution and then used the Mahalanobis distance to calculate p-values, the $\text{Unif}(0,1)$ distribution of these p-values confirms that the Mahalanobis distance is appropriate.
+
+We can now test whether fold-changes are really Multivariate Gaussian distributed by inspecting the distribution of Mahalanobis distance p-values from the no-signal timecourses. 
+
+```{r}
 # test timecourse samples for multivariate normality
 time_course_mahalanobis_dist <- mahalanobis(timecourse_spread[,-c(1:2)], center = rep(0, n_fold_changes), cov = timecourse_covariance)
-hist(pchisq(time_course_mahalanobis_dist, df = n_fold_changes, lower.tail = FALSE), breaks = 50)
+hist(pchisq(time_course_mahalanobis_dist, df = n_fold_changes, lower.tail = FALSE), breaks = 50, main = "p-values for no-signal timecourses using MN fold-change model")
 ```
+
+The p-values for the no-signal fold change timecourses are indeed $\text{Unif}(0,1)$ distributed as we hoped.
+
+Now, we can calculate the Mahalanobis distances and their corresponding p-values for the signal-containing timecourses as well. Signal in these timecourses will both increase the overall variance in expression for a feature, and deviations of nearby timepoints may be similar. These factors will make it harder for the Multivariate Gaussian noise model to explain the signal-containing expression vector, resulting in a high Mahalanobis distance and a small p-value.
 
 ```{r}
 timecourse_mvn <- simulated_timecourses %>%
@@ -415,6 +420,7 @@ timecourse_mvn %>%
   scale_fill_brewer(palette = "Set1")
 ```
 
+Based on the p-value distributions, most of the signal-containing timecourses have small p-values suggesting increased recall. We can verify this as before by summarizing results based on the realized FDR and the overall recall of signal-containing timecourses at this FDR cutoff.
 
 ```{r}
 timecourse_mvn %>%
@@ -429,3 +435,14 @@ timecourse_mvn %>%
          recall = `true positive` / (`false negative` + `true positive`)) %>%
   knitr::kable()
 ```
+
+The Multivariate Gaussian test did a great job of appropriately identifying signal-containing timecourses. The high power of this test arises from using estimates of noise level of observations, and our resulting ability to step away from assumptions regrading the types of time-dependent signals we expect.
+
+The test uses not just a pattern of expression but also information about the magnitude of noise associated with each observation. This information is available in many contexts in genomics. A couple examples where observation-level estimates of noise are available are (1) via the mean-variance relationships of [RNAseq data](https://www.bioconductor.org/packages/release/bioc/vignettes/edgeR/inst/doc/edgeRUsersGuide.pdf) or (2) via consistency of peptides in [proteomics data](https://pubs.acs.org/doi/abs/10.1021%2Facs.jproteome.7b00699). Having these estimates can identify large fold-changes which are unlikely to occur by chance, even if all post time zero timepoints are similar. Similarly, complex rapid dynamics will look like a poorly fit regression model with high residual error. But, if we know the magnitude of residual error that we expect, then signals can be identified by just looking for an excess of variation in the timecourse (accounting for the bias introduced by time zero normalization). Using noise etimates may seem like cheating since this information was not directly used by the other tests. If we were to use an estimate of the noise level it would be to carry-out a weighted least squared regression. But, since the noise of all observations have the same level of noise added, weighted regressions would be equivalent to the un-sweighted regressions used above.
+
+Using Mahalanobis distance, we can look for any departures from the null noise model to define signal. This lets us step away from models which look for particular types of signals, such as the linear, cubic, or smooth relationships sought in the regression models we applied. Some of these models can be quite flexible, but when the underlying data does not follow these relationships these models will often fail. In this case, we simulated signals as biologically feasible sigmoidal or impulse responses, so none of the regression models applied could capture every instance of a simulated signals containing timecourse. In this case, if we were to use a regression model then we would be best off fitting a non-linear least squares model following the sigmoidal or impulse form. Doing this is actually non-trivial if we want to avoid pathological fits, but these issues have been addressed in the [impulse](https://github.com/calico/impulse) R package. I'll discuss this problem in a future post.
+
+
+
+
+

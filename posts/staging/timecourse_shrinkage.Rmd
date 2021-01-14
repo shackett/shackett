@@ -11,7 +11,16 @@ knitr::opts_chunk$set(echo = TRUE)
 
 In my last post, I discussed regression and likelihood-based methods for detecting temporal dynamics in timecourse data. These experiments typically involve perturbing a steady-state system at "time zero" and then measuring how the system changes at subsequent time points.
 
-When working with such data I find that its useful to separate modeling into two phases. The first goal is to detect timecourses containing signal using statistical methods (the subject of **post**). Once this has been accomplished, we can proceed to characterize these signals using a wider array of methods (signal processing, mechanistic models, phenomonological models, stats/ML).
+When working with such data I find that its useful to separate modeling into two phases. The first goal is to detect timecourses containing signal using statistical methods (the subject of **post**). Once this has been accomplished, we can proceed to characterize these signals using an array of methods (signal processing, mechanistic models, phenomonological models, stats/ML). While some methods, 
+
+By first removing timecourses which lack signal, we 
+
+This allows us to apply hard-thresholding to zero out whereby features with no signal are zeroed-out across all timepoints. 
+
+
+
+
+Some methods may be able to work on 
 
 
 ```{r}
@@ -85,6 +94,7 @@ pi_zero_by_t <- estimate_fpi0(p = observation_signals$p_norm,
   dplyr::slice(1) %>%
   dplyr::ungroup() %>%
   dplyr::arrange(z0)
+
 qplot(y = pi_zero_by_t$fpi0, x = pi_zero_by_t$z0) +
   scale_x_discrete("Time") +
   scale_y_continuous(expression(pi[0] ~ "= E[F / (T + F)]")) +
@@ -123,4 +133,3 @@ ggplot(shrunken_timecourse_estimates %>%
   theme_minimal()
 ```
 
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
