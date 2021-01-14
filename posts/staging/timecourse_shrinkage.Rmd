@@ -6,22 +6,23 @@ output: html_document
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(echo = TRUE, eval = FALSE)
 ```
 
 In my last post, I discussed regression and likelihood-based methods for detecting temporal dynamics in timecourse data. These experiments typically involve perturbing a steady-state system at "time zero" and then measuring how the system changes at subsequent time points.
 
-When working with such data I find that its useful to separate modeling into two phases. The first goal is to detect timecourses containing signal using statistical methods (the subject of **post**). Once this has been accomplished, we can proceed to characterize these signals using an array of methods (signal processing, mechanistic models, phenomonological models, stats/ML). While some methods, 
+When working with such data I find that its useful to separate modeling into two phases:
 
-By first removing timecourses which lack signal, we 
+1. First detecting timecourses containing signal using statistical methods (the subject of **post**).
+2. Then characterize these signals of significant timecourses.
 
-This allows us to apply hard-thresholding to zero out whereby features with no signal are zeroed-out across all timepoints. 
+Many methods, such as linear regression, will combine these two steps by both detecting a significant effect with estimating its effect. But the interpretability of these methods comes with the cost that we are applying a somewhat rigid view that variation in our responses is described by the contrasts setup in our design matrix. This is one reason why I favor identifying signals without requiring *a priori* assumption of the types of temporal signals we expect. The Multivariate Gaussian test I previously discussed is one such method. Another approach would be to collect replicates and then applying ANOVA to categorically-encoded timepoints. Both of these tests would allow us to detect arbitrary relationships between time and a response. The downside here is that interpreting changes is difficult, because we only know that a timecourse contains signal but not what the signal looks like.
 
+To characterize signal in signal-containing timecourse we can use methods which will generate interpretable parameters - thereby allowing us to better characterize similarity and differences among features. We could do this using an array of methods which may not have been suitable for identifying signals in the first place. For example, signal processing, mechanistic models, phenomonological models, stats/ML. In the future, I'll discuss the phenomonological [impulse model](https://github.com/calico/impulse) as a way of summarizing changes based on their magnitude and timing. 
 
+Here, I'll discuss a signal processing step that is helpful before modeling the dynamics of individual responses. While we've already identified signal-containing timecourses, not all observations will necessarily contain signal. In perturbation timecourses early measurements may be used to detect rapid changes, but these changes are likely to be rarer than changes manifests later in a timecourse. Because of this, we may trust a weak signal later in a timecourse than an earlier one. This intution can be formalized by assessing signals at an observation level and then applying soft-thresholding to shrink fold-changes towards zero. This shrinkage will be more aggressive for earlier, more dubious observations. This is possible by using the functional false-discvoery rate (fFDR).
 
-
-Some methods may be able to work on 
-
+First, I'll load some bread-and-butter packages, and then load the perturbation timecourse simulation from **post**.
 
 ```{r}
 library(dplyr)
@@ -43,6 +44,8 @@ simulated_timecourses <- simulated_timecourses %>%
   filter(signal == "contains signal")
 ```
 
+As a reminder, we can plot example timecourses drawn from 2K simulated signal-containing timecourses. These timecourses are simulated from an impulse model and will contain one or two sigmoidal responses.
+
 ```{r}
 example_tcs <- simulated_timecourses %>%
   distinct(tc_id) %>%
@@ -60,11 +63,13 @@ simulated_timecourses %>%
   theme(legend.position = "bottom")
 ```
 
-
-
+The true fold changes are always zero at time zero, and many signals don't begin emerging until late in the time series. This means that the overall magnitude of signal vs. noise tends to increase over time, so we are more likely to suspect that late changes are real.
 
 # estimate the FDR for significant timecourses
 
+In line with the Multivariate Gaussian test used to identify signal-containing timecourses, we will again assume that we know the standard deviation of individual measurements.
+
+Using this information, we can assess how likely an observation is to have come from the underlying noise estimate using a Wald test. Because we are working with fold changes, the variance of fold-changes will be twice the variance of individual observations (the variance of a difference of normals equals the sum of the variances of each normal). With this noise estimate, observed fold change can be compared to the standard deviation estimate to yield a z-score and corresponding p-values.
 
 ```{r timecourse_filtering}
 
@@ -81,6 +86,11 @@ ggplot(observation_signals, aes(x = p_norm, y = ..density..)) +
   ggtitle("Within significant timecourses, early timepoints are generally noise; later timepoints, generally are signal")
 ```
 
+Using this approach, we can see that the p-values distributions are closer to $\text{Unif}(0,1)$ at early timepoints and there is a larger fraction of small p-values at late timepoints.
+
+To correct for multiple tests, we could now apply Storey's false discovery rate to control the expected number of false positives (no signal) observations relative to the total number of discoveries that we accept (false positive and true positives). This approach models a p-value distributions as a mixture of true negatives (which will be $\sim\text{Unif}(0,1)$) a true positives (which will tend to have small p-values). The fraction of true negatives is estimated as $\pi_{0}$. Then a cutoff $\lambda$ can be chosen to constrain the FDR at a level (lets say 10\%) based on the ratio of expected false positives ($N\pi_{0}\lambda$) to observations less than $\lambda$ (TPs + FPs).
+
+Because a smaller estimate of $\pi_{0}$ will tend to incrase the $\lambda$ cutoff that controls the FDR thereby increasing the total number of discoveries, we should care about how $\pi_{0}$ is treated. If we were pooling all observations in a time series together then we would in essence say that they have the same $\pi_{0}$ fraction. From the p-value histograms above, we can see that this isn't true. Early timepoints have a high $\pi_{0}$ while later timepoints $\pi_{0}$ is much lower. To account for the differences in $\pi_{0}$ we could estimate the FDR of timepoints separately but this may run into problems if we have relatively few observations for a timepoint. Instead, we can apply the functional FDR to estimate $\pi_{0}$ as a monotonic function of a power surrogate. For this problem, this will mean that we can estimate $\pi_{0}$ as a function of time.
 
 ```{r observation_level_fdr}
 library(fFDR)
@@ -99,6 +109,7 @@ qplot(y = pi_zero_by_t$fpi0, x = pi_zero_by_t$z0) +
   scale_x_discrete("Time") +
   scale_y_continuous(expression(pi[0] ~ "= E[F / (T + F)]")) +
   theme_bw()
+
 timepoint_lists <- observation_signals %>%
   plyr::dlply(.variables = "time", dplyr::tbl_df)
 # calculate the lfdr for each observation using a timepoint specific lfdr
