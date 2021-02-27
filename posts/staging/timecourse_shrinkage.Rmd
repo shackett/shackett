@@ -24,7 +24,7 @@ Here, I'll discuss a signal processing step that is helpful before modeling the 
 
 First, I'll load some bread-and-butter packages, and then load the perturbation timecourse simulation from **post**.
 
-```{r}
+```{r env_setup, message=FALSE}
 library(dplyr)
 library(ggplot2)
 library(tidyr)
@@ -33,7 +33,7 @@ library(tidyr)
 theme_set(theme_bw() + theme(legend.position = "bottom"))
 ```
 
-```{r create_timecourse_dataset}
+```{r create_timecourse_dataset, message=FALSE}
 timepts <- c(0, 5, 10, 20, 30, 40, 60, 90) # time points measured
 measurement_sd <- 0.5 # standard deviation of Gaussian noise added to each observation
 
@@ -83,7 +83,7 @@ observation_signals <- simulated_timecourses %>%
   dplyr::mutate(p_norm = 1 - abs(0.5 - pnorm(z_score))*2)
 
 ggplot(observation_signals, aes(x = p_norm, y = ..density..)) +
-  geom_histogram(bins = 50) +
+  geom_histogram(bins = 50, breaks = seq(0, 1, by=0.02)) +
   scale_x_continuous("P-value (Wald test)") +
   ggtitle("Observation-level p-values within signal-containing timecourses")
 ```
@@ -134,11 +134,11 @@ If we want our findings to be reliable then we would like to know how likely the
 
 To control the FDR at a level $\alpha$, the Storey procedure first calculates $\hat{\pi}_{0}$, the estimated fraction of null hypothesis (i.e., the 0.5 value from our simulation). This is done by looking at large p-values (near 1). Because large p-values will rarely be signal-containing positives there will be fewer large p-values than would be expected from the number of tests. For example, there are `r sum(simple_pvalue_mixture$p > 0.9)` p-values > 0.9 in our example, which is close to `r n_sims*pi0*0.1`, the value we would expect from $N\pi_{0}*0.1$ (`r n_sims` * $\pi_{0}$ * 0.1). (I'll use the true value of $\pi_{0}$ (`r pi0`) as a stand-in for the estimate of $\hat{\pi}_{0}$ so the numbers are a little clearer.)
 
-Just as we expected `r n_sims*pi0*0.1` null p-values on the interval from [0.9,1], we would expect `r n_sims*pi0*0.1` null p-values on the interval [0,0.1]. But, there are actually `r sum(simple_pvalue_mixture$p < 0.1)` with p-values < 0.1 because positives tend have small p-values. If we chose 0.1 as a possible cutoff, then we would expect `r n_sims*pi0*0.1` false positives while the observed number of p-values < 0.1 equals the denominator of the FDR ($\text{FP} + \text{TP}$). The ratio of these two values, `r n_sims*pi0*0.1/sum(simple_pvalue_mixture$p < 0.1`, would be the expected FDR at a p-value cutoff of 0.1. Now, we usually don't want to choose a cutoff and then live with the FDR we would get, but rather control the FDR at a level $\alpha$ by tuning the cutoff as a parameter $\lamba$.
+Just as we expected `r n_sims*pi0*0.1` null p-values on the interval from [0.9,1], we would expect `r n_sims*pi0*0.1` null p-values on the interval [0,0.1]. But, there are actually `r sum(simple_pvalue_mixture$p < 0.1)` with p-values < 0.1 because positives tend have small p-values. If we chose 0.1 as a possible cutoff, then we would expect `r n_sims*pi0*0.1` false positives while the observed number of p-values < 0.1 equals the denominator of the FDR ($\text{FP} + \text{TP}$). The ratio of these two values, `r n_sims*pi0*0.1/sum(simple_pvalue_mixture$p < 0.1)`, would be the expected FDR at a p-value cutoff of 0.1. Now, we usually don't want to choose a cutoff and then live with the FDR we would get, but rather control the FDR at a level $\alpha$ by tuning the cutoff as a parameter $\lambda$.
 
 To do this we can use the q-value package:
 
-```{r}
+```{r estimate_qvalues}
 # install q-value from bioconductor if needed
 # remotes::install_bioc("qvalue")
 
@@ -169,7 +169,8 @@ TP <- hypothesis_type_counts$n[hypothesis_type_counts$hypothesis_type == "TP"]
 FP <- hypothesis_type_counts$n[hypothesis_type_counts$hypothesis_type == "FP"]
 FDR <- FP / (TP + FP)
 
-knitr::kable(hypothesis_type_counts)
+knitr::kable(hypothesis_type_counts) %>%
+  kableExtra::kable_styling(full_width = FALSE)
 ```
 
 In this case, due to our simulation, we know whether individual discoveries are true or false positives. As a result we can determine that the realized FDR is `r FDR`, close to our target of 0.05.
@@ -209,7 +210,8 @@ shrinkage_estimates %>%
   mutate(resid = value - mu) %>%
   group_by(processing) %>%
   summarize(RSS = sum(resid^2)) %>%
-  knitr::kable()
+  knitr::kable() %>%
+  kableExtra::kable_styling(full_width = FALSE)
 ```
 
 # Stratifying hypotheses with the functional FDR.
@@ -218,7 +220,7 @@ From the previous coverage of the FDR, $\hat{\pi}_{0}$ because $\mathop{{}\mathb
 
 ```{r}
 ggplot(observation_signals, aes(x = p_norm, y = ..density..)) +
-  geom_histogram(bins = 50) +
+  geom_histogram(bins = 50, breaks = seq(0, 1, by=0.02)) +
   facet_wrap(~ time, scale = "free_y") +
   ggtitle("Within signal-containing timecourses, early timepoints are generally noise;\nlater timepoints, generally are signal")
 ```
@@ -258,7 +260,7 @@ shrunken_timecourse_estimates <- fqvalue(p = observation_signals$p_norm,
 
 With the shrinkage estimates in hand, we can re-examine the original timecourses and compare the shrinkage estimates to the measured observations.
 
-```{r tc_shrinkage_examples, fig.height = 6, fig.width = 6}
+```{r tc_shrinkage_examples, fig.height = 6, fig.width = 6, warning = FALSE}
 shrunken_timecourse_estimates %>%
   inner_join(example_tcs, by = "tc_id") %>%
   bind_rows(tibble::tibble(time = 0,
@@ -280,19 +282,20 @@ From these timecourses we can see that later timepoints' shrinkage estimates are
 
 Like, the normal mixture simulation, we can compare how the original values vs. the shrinkage estimates compare to the true values to see which is a better reconstruction of the underlying signal.
 
-```{r timecourse_shrinkage_RSS}
+```{r timecourse_shrinkage_RSS, warning = FALSE}
 shrunken_timecourse_estimates %>%
   select(sim_fit, fold_change, shrunken_fold_change) %>%
   gather(measure, value, -sim_fit) %>%
   mutate(resid = value - sim_fit) %>%
   group_by(measure) %>%
   summarize(RSS = sum(resid^2)) %>%
-  knitr::kable()
+  knitr::kable() %>%
+  kableExtra::kable_styling(full_width = FALSE)
 ```
 
 We can also compare the reconstruction across time to see that most of the gains come in cleaning up the early timepoints which were dominated by noise.
 
-```{r timecourse_shrinkage_RSS_by_time}
+```{r timecourse_shrinkage_RSS_by_time, warning = FALSE}
 shrunken_timecourse_estimates %>%
   select(time, sim_fit, fold_change, shrunken_fold_change) %>%
   gather(measure, value, -sim_fit, -time) %>%
@@ -300,8 +303,7 @@ shrunken_timecourse_estimates %>%
   group_by(measure, time) %>%
   summarize(RSS = sum(resid^2)) %>%
   spread(measure, RSS) %>%
-  mutate(fraction_noise_removed = (fold_change - shrunken_fold_change)/fold_change) %>%
-  knitr::kable()
+  mutate(fraction_noise_removed = (fold_change - shrunken_fold_change)/fold_change)
 ```
 
 The shrinkage estimates remove much of the noise at early timepoints while preserving much of the signal as-is. This allows us to use the shrinkage estimates as a drop-in replacements for the original values when further interpreting these signals. In my next post I'll discuss one method for characterizing these signals by representing the kinetics of a timeseries based on the timing and magnitudes of changes using the [impulse R package](https://github.com/calico/impulse).
