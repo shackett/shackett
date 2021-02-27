@@ -47,6 +47,8 @@ simulated_timecourses <- simulated_timecourses %>%
 As a reminder, we can plot example timecourses drawn from 2K simulated signal-containing timecourses. These timecourses are simulated from an impulse model and will contain one or two sigmoidal responses.
 
 ```{r tc_examples, fig.height = 6, fig.width = 6}
+set.seed(1234)
+
 example_tcs <- simulated_timecourses %>%
   distinct(tc_id) %>%
   sample_n(5) %>%
@@ -128,7 +130,7 @@ gridExtra::grid.arrange(observation_grob, pvalues_grob, ncol = 2)
 
 While there is a mixture of positive and negative observations, their values cannot be clearly separated (that would be too easy!) rather noise works against some positives, and some negative observations take on extreme values by chance. This is paralleled by the p-values of positive and negative observations. Positive p-values tend to be small, but may also be large; while negative p-values being uniformly distributed from 0 to 1 are as likely to be small as large. The fact that if we have many negative tests we will inevitably have some small p-values is why we should care about correcting for multiple hypotheses and controlling the FDR.
 
-If we want our findings to be reliable then we would like to know how likely they are to be due to chance. For a single test, the p-value captures this notion by calculating the chance that a null value would be as or more extreme than the observed value given that the null hypothesis is true. Extending this to the situation where we may have thousands of p-values, some of which will be small by chance, requires us to think about finding a set of p-values which collectively are enriched for positives relative to negative. The FDR is one measure for this enrichment which involves selecting a set of observation (the positive tests) which constrains the expected number of false positives (FP) selected relative to true positives to a desired proportion: i.e. $\mathop{{}\mathbb{E}}\left[\frac{\text{FP}}{\text{FP} + \text{TP}}\right] \leq \alpha$.
+If we want our findings to be reliable then we would like to know how likely they are to be due to chance. For a single test, the p-value captures this notion by calculating the chance that a null value would be as or more extreme than the observed value given that the null hypothesis is true. Extending this to the situation where we may have thousands of p-values, some of which will be small by chance, requires us to think about finding a set of p-values which collectively are enriched for positives relative to negative. The FDR is one measure for this enrichment which involves selecting a set of observation (the positive tests) which constrains the expected number of false positives ($\mathop{{}\mathbb{E}}$FP) selected relative to true positives to a desired proportion: i.e. $\mathop{{}\mathbb{E}}\left[\frac{\text{FP}}{\text{FP} + \text{TP}}\right] \leq \alpha$.
 
 To control the FDR at a level $\alpha$, the Storey procedure first calculates $\hat{\pi}_{0}$, the estimated fraction of null hypothesis (i.e., the 0.5 value from our simulation). This is done by looking at large p-values (near 1). Because large p-values will rarely be signal-containing positives there will be fewer large p-values than would be expected from the number of tests. For example, there are `r sum(simple_pvalue_mixture$p > 0.9)` p-values > 0.9 in our example, which is close to `r n_sims*pi0*0.1`, the value we would expect from $N\pi_{0}*0.1$ (`r n_sims` * $\pi_{0}$ * 0.1). (I'll use the true value of $\pi_{0}$ (`r pi0`) as a stand-in for the estimate of $\hat{\pi}_{0}$ so the numbers are a little clearer.)
 
@@ -210,10 +212,9 @@ shrinkage_estimates %>%
   knitr::kable()
 ```
 
-# Budgeting power with the functional FDR.
+# Stratifying hypotheses with the functional FDR.
 
-
-But, as we suspect that there will be stronger signals at later timepoints, it is helpful to stratify the p-value histograms by timepoint.
+From the previous coverage of the FDR, $\hat{\pi}_{0}$ because $\mathop{{}\mathbb{E}}$FP $\propto$ $\hat{\pi}_{0}$ greatly affecting the number of discoveries we can recover for a target FDR. It will similarly impact lFDR-based shrinkage since the lFDR is also $\propto$ $\hat{\pi}_{0}$. Because of its impact on our interpretation of the FDR and lFDR it is crucial that $\hat{\pi}_{0}$ is estimated accurately. But, our original p-value histogram for observation-level significance from the timecourse dataset, might make us think that we could treat it similarly to the normal mixture simulation, using a fixed value of $\hat{\pi}_{0}$ to estimate the FDR/lFDR. But, we've already noted that there tends to be more signal at later timepoints, this can be seen from the p-value histograms as well.
 
 ```{r}
 ggplot(observation_signals, aes(x = p_norm, y = ..density..)) +
@@ -222,17 +223,14 @@ ggplot(observation_signals, aes(x = p_norm, y = ..density..)) +
   ggtitle("Within signal-containing timecourses, early timepoints are generally noise;\nlater timepoints, generally are signal")
 ```
 
-Visualizing p-value histograms separately by time, we can see that the p-values distributions are closer to $\text{Unif}(0,1)$ at early timepoints and there is a larger fraction of small p-values at late timepoints.
-
-To correct for multiple tests, we could now apply Storey's false discovery rate to control the expected number of false positives (no signal) observations relative to the total number of discoveries that we accept (false positive and true positives). This approach models a p-value distributions as a mixture of true negatives (which will be $\sim\text{Unif}(0,1)$) a true positives (which will tend to have small p-values). The fraction of true negatives is estimated as $\pi_{0}$. Then a cutoff $\lambda$ can be chosen to constrain the FDR at a level (lets say 10\%) based on the ratio of expected false positives ($N\pi_{0}\lambda$) to observations less than $\lambda$ (TPs + FPs).
-
-Because a smaller estimate of $\pi_{0}$ will tend to incrase the $\lambda$ cutoff that controls the FDR thereby increasing the total number of discoveries, we should care about how $\pi_{0}$ is treated. If we were pooling all observations in a time series together then we would in essence say that they have the same $\pi_{0}$ fraction. From the p-value histograms above, we can see that this isn't true. Early timepoints have a high $\pi_{0}$ while later timepoints $\pi_{0}$ is much lower. To account for the differences in $\pi_{0}$ we could estimate the FDR of timepoints separately but this may run into problems if we have relatively few observations for a timepoint. Instead, we can apply the functional FDR to estimate $\pi_{0}$ as a monotonic function of a power surrogate. For this problem, this will mean that we can estimate $\pi_{0}$ as a function of time.
+Visualizing p-value histograms separately by time, we can see that the p-values distributions are closer to $\text{Unif}(0,1)$ at early timepoints and there is a larger fraction of small p-values at late timepoints. This reflects that early timepoints have a high $\pi_{0}$ while later timepoints' $\pi_{0}$ is much lower. To account for the differences in $\pi_{0}$ we could estimate the FDR of timepoints separately but this may run into problems if we have relatively few observations for a timepoint. Instead, we can apply the [functional FDR](https://academic.oup.com/biostatistics/article/22/1/68/5499195) to estimate $\pi_{0}$ as a monotonic function of a power surrogate. For this problem, this will mean that we can estimate $\pi_{0}$ as a function of time.
 
 ```{r observation_level_fdr, fig.height = 6, fig.width = 6}
 library(fFDR)
 
 pi_zero_by_t <- estimate_fpi0(p = observation_signals$p_norm,
-                              z0 = observation_signals$time, method = "glm")$table %>%
+                              z0 = observation_signals$time,
+                              method = "glm")$table %>%
   dplyr::distinct(z0, fpi0) %>%
   dplyr::group_by(z0) %>%
   dplyr::slice(1) %>%
@@ -241,36 +239,69 @@ pi_zero_by_t <- estimate_fpi0(p = observation_signals$p_norm,
 
 qplot(y = pi_zero_by_t$fpi0, x = pi_zero_by_t$z0) +
   scale_x_discrete("Time") +
-  scale_y_continuous(expression(pi[0] ~ "= E[F / (T + F)]")) +
-  theme_bw()
+  scale_y_continuous(expression(pi[0] ~ "= E[F / (T + F)]"), expand = c(0,0)) +
+  theme_bw() +
+  expand_limits(y = c(0,1))
 ```
 
-```{r}
-timepoint_lists <- observation_signals %>%
-  plyr::dlply(.variables = "time", dplyr::tbl_df)
+Using the fFDR, as expected the estimated $\pi_{0}$ is high are early timepoints and drops precipitously at later timepoints. This would in turn mean that the lFDRs that we'll use for shrinkage tend to be high at early timepoints and consequently the lFDR-based shrinkage will aggressively shrink observations towards zero. These lFDRs which utilize an appropriate $\pi_{0}$ can be calculated using the *fqvalue* function from lFDR.
 
-# calculate the lfdr for each observation using a timepoint specific lfdr
-shrunken_timecourse_estimates <- lapply(timepoint_lists, function(a_time_set) {
-  a_time_set$lfdr <- qvalue::lfdr(a_time_set$p_norm, pi0 = pi_zero_by_t$fpi0[pi_zero_by_t$z0 == a_time_set$time[1]])
-  a_time_set
-}) %>%
-  dplyr::bind_rows() %>%
-  dplyr::mutate(shrunken_fold_change = fold_change * (1-lfdr))
+```{r timecourse_flfdrs}
+shrunken_timecourse_estimates <- fqvalue(p = observation_signals$p_norm,
+                  z0 = observation_signals$time,
+                  pi0.method = "glm")$table %>%
+  bind_cols(observation_signals) %>%
+  mutate(shrunken_fold_change = fold_change * (1-lfdr))
 ```
+
+# Timecourse Shrinkage with functional FDR
+
+With the shrinkage estimates in hand, we can re-examine the original timecourses and compare the shrinkage estimates to the measured observations.
 
 ```{r tc_shrinkage_examples, fig.height = 6, fig.width = 6}
 shrunken_timecourse_estimates %>%
   inner_join(example_tcs, by = "tc_id") %>%
-  dplyr::bind_rows(tibble::tibble(time = 0,
+  bind_rows(tibble::tibble(time = 0,
                                   label = as.character(1:5),
                                   sim_fit = 0,
                                   shrunken_fold_change = 0)) %>%
-  dplyr::arrange(label, time) %>%
+  arrange(label, time) %>%
   ggplot(aes(x = time, color = label)) +
   geom_path(aes(y = sim_fit, group = label)) +
-  geom_point(aes(y = shrunken_fold_change)) +
+  geom_point(aes(y = shrunken_fold_change), shape = 19, position = position_jitter(width = 1)) +
+  geom_point(aes(y = fold_change), shape = 1, position = position_jitter(width = 1)) +
   scale_y_continuous("Shrunken Fold-Change") +
   scale_color_brewer("Example Timecourse", palette = "Set2") +
-  ggtitle("Simulated timecourses containing signal", "line: true values, points: observed values") +
+  ggtitle("Simulated timecourses containing signal", "line: true values, hollow points: observed values, filled points: shrinkage estimates") +
   theme(legend.position = "bottom")
 ```
+
+From these timecourses we can see that later timepoints' shrinkage estimates are very similar to their observed value while at early timepoints only strong signals are preserved. Its also important to note that because shrinkage preserves later timepoints strong signals preferentially, the kinetics implied by some responses may be shifted towards late timepoints as well. This is a property that is even more pronounced using other soft-thresholding methods such as shrinking all observations towards zero proportionally to the standard deviation.
+
+Like, the normal mixture simulation, we can compare how the original values vs. the shrinkage estimates compare to the true values to see which is a better reconstruction of the underlying signal.
+
+```{r timecourse_shrinkage_RSS}
+shrunken_timecourse_estimates %>%
+  select(sim_fit, fold_change, shrunken_fold_change) %>%
+  gather(measure, value, -sim_fit) %>%
+  mutate(resid = value - sim_fit) %>%
+  group_by(measure) %>%
+  summarize(RSS = sum(resid^2)) %>%
+  knitr::kable()
+```
+
+We can also compare the reconstruction across time to see that most of the gains come in cleaning up the early timepoints which were dominated by noise.
+
+```{r timecourse_shrinkage_RSS_by_time}
+shrunken_timecourse_estimates %>%
+  select(time, sim_fit, fold_change, shrunken_fold_change) %>%
+  gather(measure, value, -sim_fit, -time) %>%
+  mutate(resid = value - sim_fit) %>%
+  group_by(measure, time) %>%
+  summarize(RSS = sum(resid^2)) %>%
+  spread(measure, RSS) %>%
+  mutate(fraction_noise_removed = (fold_change - shrunken_fold_change)/fold_change) %>%
+  knitr::kable()
+```
+
+The shrinkage estimates remove much of the noise at early timepoints while preserving much of the signal as-is. This allows us to use the shrinkage estimates as a drop-in replacements for the original values when further interpreting these signals. In my next post I'll discuss one method for characterizing these signals by representing the kinetics of a timeseries based on the timing and magnitudes of changes using the [impulse R package](https://github.com/calico/impulse).
