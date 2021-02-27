@@ -6,7 +6,7 @@ output: html_document
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE, eval = FALSE)
+knitr::opts_chunk$set(echo = TRUE)
 ```
 
 In my last post, I discussed regression and likelihood-based methods for detecting temporal dynamics in timecourse data. These experiments typically involve perturbing a steady-state system at "time zero" and then measuring how the system changes at subsequent time points.
@@ -14,13 +14,13 @@ In my last post, I discussed regression and likelihood-based methods for detecti
 When working with such data I find that its useful to separate modeling into two phases:
 
 1. First detecting timecourses containing signal using statistical methods (the subject of **post**).
-2. Then characterize these signals of significant timecourses.
+2. Then characterizing the signals of significant timecourses.
 
 Many methods, such as linear regression, will combine these two steps by both detecting a significant effect with estimating its effect. But the interpretability of these methods comes with the cost that we are applying a somewhat rigid view that variation in our responses is described by the contrasts setup in our design matrix. This is one reason why I favor identifying signals without requiring *a priori* assumption of the types of temporal signals we expect. The Multivariate Gaussian test I previously discussed is one such method. Another approach would be to collect replicates and then applying ANOVA to categorically-encoded timepoints. Both of these tests would allow us to detect arbitrary relationships between time and a response. The downside here is that interpreting changes is difficult, because we only know that a timecourse contains signal but not what the signal looks like.
 
-To characterize signal in signal-containing timecourse we can use methods which will generate interpretable parameters - thereby allowing us to better characterize similarity and differences among features. We could do this using an array of methods which may not have been suitable for identifying signals in the first place. For example, signal processing, mechanistic models, phenomonological models, stats/ML. In the future, I'll discuss the phenomonological [impulse model](https://github.com/calico/impulse) as a way of summarizing changes based on their magnitude and timing. 
+To characterize the patterns in signal-containing timecourse we can use methods which will generate interpretable parameters - thereby allowing us to better characterize similarity and differences among features. We could do this using an array of methods which may not have been suitable for identifying signals in the first place. For example, signal processing, mechanistic models, phenomonological models, stats/ML. In the future, I'll discuss the phenomonological [impulse model](https://github.com/calico/impulse) as a way of summarizing changes based on their magnitude and timing. 
 
-Here, I'll discuss a signal processing step that is helpful before modeling the dynamics of individual responses. While we've already identified signal-containing timecourses, not all observations will necessarily contain signal. In perturbation timecourses early measurements may be used to detect rapid changes, but these changes are likely to be rarer than changes manifests later in a timecourse. Because of this, we may trust a weak signal later in a timecourse than an earlier one. This intution can be formalized by assessing signals at an observation level and then applying soft-thresholding to shrink fold-changes towards zero. This shrinkage will be more aggressive for earlier, more dubious observations. This is possible by using the functional false-discvoery rate (fFDR).
+Here, I'll discuss a signal processing step that is helpful before modeling the dynamics of individual responses. While we've already identified signal-containing timecourses, not all observations will necessarily contain signal. In perturbation timecourses early measurements may be collected in order to detect rapid changes, but these changes are likely to be rarer than changes manifesting later in a timecourse. Because of this, we may trust a weak signal later in a timecourse than an earlier one. This intuiton can be formalized by assessing signals at an observation level and then applying soft-thresholding to shrink fold-changes towards zero. This shrinkage will be more aggressive for earlier, more dubious observations. This is possible by using the functional false-discvoery rate (fFDR).
 
 First, I'll load some bread-and-butter packages, and then load the perturbation timecourse simulation from **post**.
 
@@ -30,7 +30,7 @@ library(ggplot2)
 library(tidyr)
 
 # ggplot default theme
-theme_set(theme_bw())
+theme_set(theme_bw() + theme(legend.position = "bottom"))
 ```
 
 ```{r create_timecourse_dataset}
@@ -46,7 +46,7 @@ simulated_timecourses <- simulated_timecourses %>%
 
 As a reminder, we can plot example timecourses drawn from 2K simulated signal-containing timecourses. These timecourses are simulated from an impulse model and will contain one or two sigmoidal responses.
 
-```{r}
+```{r tc_examples, fig.height = 6, fig.width = 6}
 example_tcs <- simulated_timecourses %>%
   distinct(tc_id) %>%
   sample_n(5) %>%
@@ -57,48 +57,182 @@ simulated_timecourses %>%
   ggplot(aes(x = time, color = label)) +
   geom_path(aes(y = sim_fit)) +
   geom_point(aes(y = abundance)) +
-  scale_y_continuous("Abundance") +
+  scale_y_continuous("Fold-Change") +
   scale_color_brewer("Example Timecourse", palette = "Set2") +
-  ggtitle("Simulated timecourses containing signal", "line: true values, points: observed values") +
-  theme(legend.position = "bottom")
+  ggtitle("Simulated timecourses containing signal", "line: true values, points: observed values")
 ```
 
-The true fold changes are always zero at time zero, and many signals don't begin emerging until late in the time series. This means that the overall magnitude of signal vs. noise tends to increase over time, so we are more likely to suspect that late changes are real.
+The true fold changes are always zero at time zero, and many signals don't begin emerging until late in the time series. This means that the overall magnitude of signal vs. noise tends to increase over time, so we are more likely to suspect that late changes are real. We may in turn want to retain these late signals in our dataset while filtering much of the early noise.
 
-# estimate the FDR for significant timecourses
+# Identifying observations with signal
+
+Before accounting for observations in a timecourse which lack signal, we first need to create a statistic which reflects observation-level signal.
 
 In line with the Multivariate Gaussian test used to identify signal-containing timecourses, we will again assume that we know the standard deviation of individual measurements.
 
-Using this information, we can assess how likely an observation is to have come from the underlying noise estimate using a Wald test. Because we are working with fold changes, the variance of fold-changes will be twice the variance of individual observations (the variance of a difference of normals equals the sum of the variances of each normal). With this noise estimate, observed fold change can be compared to the standard deviation estimate to yield a z-score and corresponding p-values.
+Using this information, we can assess how likely an observation is to have come from the underlying noise estimate using a Wald test. Because we are working with fold changes, the variance of fold-changes will be twice the variance of individual observations (the variance of a difference of normals equals the sum of the variances of each normal). With this noise estimate, observed fold change can be compared to the standard deviation estimate to yield a z-score and corresponding p-values. (One limitation of this approach is that it doesn't deal with the bias induced by time-zero normalization as discussed in **post**; If anyone knows of a better hypothesis test, please ping me :).
 
 ```{r timecourse_filtering}
-
 # Using non-centered z-statics generated from log-fold change and gene + timecourse noise estimate the local false discovery rate (lfdr) of individual observations
 observation_signals <- simulated_timecourses %>%
-  # hold out measurement that are exactly zero since they are zero by construction
+  # hold out measurements that are exactly zero since they are zero by construction
   dplyr::filter(fold_change != 0) %>%
   dplyr::mutate(z_score = fold_change / sqrt(2*measurement_sd^2)) %>%
   dplyr::mutate(p_norm = 1 - abs(0.5 - pnorm(z_score))*2)
+
+ggplot(observation_signals, aes(x = p_norm, y = ..density..)) +
+  geom_histogram(bins = 50) +
+  scale_x_continuous("P-value (Wald test)") +
+  ggtitle("Observation-level p-values within signal-containing timecourses")
+```
   
+Given that we are working with timecourses that contain some signal, its not particularly surprising that many of the observations deviate substantially from the value at time zero. This can be seen from the histogram of p-values pooled across all features and timepoints.
+
+Before digging into the temporal aspect of our data, lets review the anatomy of a p-value distribution (which was binned to create the histogram above) and how to apply FDR methodology to generate a local FDR which is ideal for shrinkage.
+
+# False discovery rate (FDR) review
+
+Using the approach of [Storey & Tibshirani](https://www.pnas.org/content/100/16/9440), we can think about a p-value histogram as a mixture of two distributions:
+
+- Negatives - features with no signal that follow our null distribution and whose p-values will in turn be distributed as $\sim\text{Unif}(0,1)$
+- Positives - features containing some signal which will consequently have elevated test statistics and tend towards having small p-values.
+
+To see this visually, we can generate a mini-simulation containing a mixture of negatives and positives.
+
+```{r pvalue_hist_sim, fig.height = 6, fig.width = 10}
+set.seed(1234)
+n_sims <- 100000
+pi0 <- 0.5
+beta <- 1.5
+
+simple_pvalue_mixture <- tibble(truth = c(rep("Positive", n_sims * (1-pi0)), rep("Negative", n_sims * pi0))) %>%
+  # positives are centered around beta; negatives around 0
+  mutate(truth = factor(truth, levels = c("Positive", "Negative")),
+         mu = ifelse(truth == "Positive", beta, 0),
+         # observations sampled from a normal distribution centered on 0
+         # or beta with an SD of 1 (the default)
+         x = rnorm(n(), mean = mu),
+         # carryout a 1-tailed wald test about 0 
+         p = pnorm(x, lower.tail = FALSE))
+
+observation_grob <- ggplot(simple_pvalue_mixture, aes(x = x, fill = truth)) +
+  geom_density(alpha = 0.5) +
+  ggtitle("Observations with and without signal")
+
+pvalues_grob <- ggplot(simple_pvalue_mixture, aes(x = p, fill = truth)) +
+  geom_histogram(bins = 100, breaks = seq(0, 1, by=0.01)) +
+  ggtitle("P-values of observations with and without signal")
+
+gridExtra::grid.arrange(observation_grob, pvalues_grob, ncol = 2)
+```
+
+While there is a mixture of positive and negative observations, their values cannot be clearly separated (that would be too easy!) rather noise works against some positives, and some negative observations take on extreme values by chance. This is paralleled by the p-values of positive and negative observations. Positive p-values tend to be small, but may also be large; while negative p-values being uniformly distributed from 0 to 1 are as likely to be small as large. The fact that if we have many negative tests we will inevitably have some small p-values is why we should care about correcting for multiple hypotheses and controlling the FDR.
+
+If we want our findings to be reliable then we would like to know how likely they are to be due to chance. For a single test, the p-value captures this notion by calculating the chance that a null value would be as or more extreme than the observed value given that the null hypothesis is true. Extending this to the situation where we may have thousands of p-values, some of which will be small by chance, requires us to think about finding a set of p-values which collectively are enriched for positives relative to negative. The FDR is one measure for this enrichment which involves selecting a set of observation (the positive tests) which constrains the expected number of false positives (FP) selected relative to true positives to a desired proportion: i.e. $\mathop{{}\mathbb{E}}\left[\frac{\text{FP}}{\text{FP} + \text{TP}}\right] \leq \alpha$.
+
+To control the FDR at a level $\alpha$, the Storey procedure first calculates $\hat{\pi}_{0}$, the estimated fraction of null hypothesis (i.e., the 0.5 value from our simulation). This is done by looking at large p-values (near 1). Because large p-values will rarely be signal-containing positives there will be fewer large p-values than would be expected from the number of tests. For example, there are `r sum(simple_pvalue_mixture$p > 0.9)` p-values > 0.9 in our example, which is close to `r n_sims*pi0*0.1`, the value we would expect from $N\pi_{0}*0.1$ (`r n_sims` * $\pi_{0}$ * 0.1). (I'll use the true value of $\pi_{0}$ (`r pi0`) as a stand-in for the estimate of $\hat{\pi}_{0}$ so the numbers are a little clearer.)
+
+Just as we expected `r n_sims*pi0*0.1` null p-values on the interval from [0.9,1], we would expect `r n_sims*pi0*0.1` null p-values on the interval [0,0.1]. But, there are actually `r sum(simple_pvalue_mixture$p < 0.1)` with p-values < 0.1 because positives tend have small p-values. If we chose 0.1 as a possible cutoff, then we would expect `r n_sims*pi0*0.1` false positives while the observed number of p-values < 0.1 equals the denominator of the FDR ($\text{FP} + \text{TP}$). The ratio of these two values, `r n_sims*pi0*0.1/sum(simple_pvalue_mixture$p < 0.1`, would be the expected FDR at a p-value cutoff of 0.1. Now, we usually don't want to choose a cutoff and then live with the FDR we would get, but rather control the FDR at a level $\alpha$ by tuning the cutoff as a parameter $\lamba$.
+
+To do this we can use the q-value package:
+
+```{r}
+# install q-value from bioconductor if needed
+# remotes::install_bioc("qvalue")
+
+library(qvalue)
+qvalue_estimates <- qvalue(simple_pvalue_mixture$p)
+```
+
+The q-value object contains an estimate of $\pi_{0}$ of `r qvalue_estimates$pi0` which is close to the truth. It also contains a vector of q-values, lFDR, and other goodies.
+
+The q-values are the quantity that we're usually interested in; if we take all of the q-values less than a target cutoff of say 0.05, then that should give us a set of "discoveries" with less than a 5% FDR.
+
+```{r}
+simple_qvalues <- simple_pvalue_mixture %>%
+  mutate(q = qvalue_estimates$qvalues)
+
+fdr_pvalue_cutoff <- max(simple_qvalues$p[simple_qvalues$q < 0.05])
+
+simple_qvalues <- simple_qvalues %>%
+  mutate(hypothesis_type = case_when(p <= fdr_pvalue_cutoff & truth == "Positive" ~ "TP",
+                                     p <= fdr_pvalue_cutoff & truth == "Negative" ~ "FP",
+                                     p > fdr_pvalue_cutoff & truth == "Positive" ~ "FN",
+                                     p > fdr_pvalue_cutoff & truth == "Negative" ~ "TN"))
+
+hypothesis_type_counts <- simple_qvalues %>%
+  count(hypothesis_type)
+
+TP <- hypothesis_type_counts$n[hypothesis_type_counts$hypothesis_type == "TP"]
+FP <- hypothesis_type_counts$n[hypothesis_type_counts$hypothesis_type == "FP"]
+FDR <- FP / (TP + FP)
+
+knitr::kable(hypothesis_type_counts)
+```
+
+In this case, due to our simulation, we know whether individual discoveries are true or false positives. As a result we can determine that the realized FDR is `r FDR`, close to our target of 0.05.
+
+In most cases we would take our discoveries and work with them further, confident that as a population, only ~5% of them are bogus. But, in some cases we care about how likely an individual observation is to be a false positive. In this case we can look at the local density of p-values near an observation of interest to estimate a local version of the FDR, the local FDR (lFDR).
+
+# lFDR-based shrinkage
+
+Because the lFDR reflects the relative odds that an observation is null it is a useful measure for shrinkage / thresholding aiming to remove noise and better approximate true value. To do this we can weight an observation by 1-lFDR. One interpretation of this is that we are using the lFDR to hedge our bets between the positive and negatiive mixture components, weighting by our null hypothesis that $\mu$ = 0 with confidence lFDR, and by the alternative $\mu \neq 0$ value of x with confidence 1-lFDR: i.e., $x_{\text{shrinkage}} = \text{lFDR}*0 + (1-\text{lFDR})*x$.
+
+```{r lFDR_shrinkage_ex, fig.height = 6, fig.width = 8}
+true_values <- tribble(~ truth, ~ mu,
+                       "Positive", beta,
+                       "Negative", 0)
+
+shrinkage_estimates <- simple_qvalues %>%
+  mutate(lfdr = qvalue_estimates$lfdr,
+         xs = x*(1-lfdr)) %>%
+  select(truth, x, xs) %>%
+  gather(processing, value, -truth) %>%
+  mutate(processing = case_when(processing == "x" ~ "original value",
+                                processing == "xs" ~ "shrinkage estimate"))
+
+ggplot(shrinkage_estimates, aes(x = value, fill = processing)) +
+  geom_density(alpha = 0.5) +
+  geom_vline(data = true_values, aes(xintercept = mu), color = "chartreuse", size = 1) +
+  facet_grid(truth ~ ., scale = "free_y") +
+  scale_fill_brewer(palette = "Set1") +
+  ggtitle("lFDR-based shrinkage improves agreement between observations and the true mean")
+```
+
+Using lFDR-based shrinkage values which are just noise were aggressively shrunk toward their true mean of 0 such that their is very little remaining variation. Positives were shrunk using the same methodology retaining extreme values near their measured value. We can verify that there is an overall decrease in uncertainty about the true mean reflecting the removal of noise.
+
+```{r}
+shrinkage_estimates %>%
+  inner_join(true_values, by = "truth") %>%
+  mutate(resid = value - mu) %>%
+  group_by(processing) %>%
+  summarize(RSS = sum(resid^2)) %>%
+  knitr::kable()
+```
+
+# Budgeting power with the functional FDR.
+
+
+But, as we suspect that there will be stronger signals at later timepoints, it is helpful to stratify the p-value histograms by timepoint.
+
+```{r}
 ggplot(observation_signals, aes(x = p_norm, y = ..density..)) +
   geom_histogram(bins = 50) +
   facet_wrap(~ time, scale = "free_y") +
-  ggtitle("Within significant timecourses, early timepoints are generally noise; later timepoints, generally are signal")
+  ggtitle("Within signal-containing timecourses, early timepoints are generally noise;\nlater timepoints, generally are signal")
 ```
 
-Using this approach, we can see that the p-values distributions are closer to $\text{Unif}(0,1)$ at early timepoints and there is a larger fraction of small p-values at late timepoints.
+Visualizing p-value histograms separately by time, we can see that the p-values distributions are closer to $\text{Unif}(0,1)$ at early timepoints and there is a larger fraction of small p-values at late timepoints.
 
 To correct for multiple tests, we could now apply Storey's false discovery rate to control the expected number of false positives (no signal) observations relative to the total number of discoveries that we accept (false positive and true positives). This approach models a p-value distributions as a mixture of true negatives (which will be $\sim\text{Unif}(0,1)$) a true positives (which will tend to have small p-values). The fraction of true negatives is estimated as $\pi_{0}$. Then a cutoff $\lambda$ can be chosen to constrain the FDR at a level (lets say 10\%) based on the ratio of expected false positives ($N\pi_{0}\lambda$) to observations less than $\lambda$ (TPs + FPs).
 
 Because a smaller estimate of $\pi_{0}$ will tend to incrase the $\lambda$ cutoff that controls the FDR thereby increasing the total number of discoveries, we should care about how $\pi_{0}$ is treated. If we were pooling all observations in a time series together then we would in essence say that they have the same $\pi_{0}$ fraction. From the p-value histograms above, we can see that this isn't true. Early timepoints have a high $\pi_{0}$ while later timepoints $\pi_{0}$ is much lower. To account for the differences in $\pi_{0}$ we could estimate the FDR of timepoints separately but this may run into problems if we have relatively few observations for a timepoint. Instead, we can apply the functional FDR to estimate $\pi_{0}$ as a monotonic function of a power surrogate. For this problem, this will mean that we can estimate $\pi_{0}$ as a function of time.
 
-```{r observation_level_fdr}
+```{r observation_level_fdr, fig.height = 6, fig.width = 6}
 library(fFDR)
 
-fq <- fqvalue(observation_signals$p_norm, observation_signals$time)
-
 pi_zero_by_t <- estimate_fpi0(p = observation_signals$p_norm,
-                              z0 = observation_signals$time)$table %>%
+                              z0 = observation_signals$time, method = "glm")$table %>%
   dplyr::distinct(z0, fpi0) %>%
   dplyr::group_by(z0) %>%
   dplyr::slice(1) %>%
@@ -109,38 +243,34 @@ qplot(y = pi_zero_by_t$fpi0, x = pi_zero_by_t$z0) +
   scale_x_discrete("Time") +
   scale_y_continuous(expression(pi[0] ~ "= E[F / (T + F)]")) +
   theme_bw()
+```
 
+```{r}
 timepoint_lists <- observation_signals %>%
   plyr::dlply(.variables = "time", dplyr::tbl_df)
+
 # calculate the lfdr for each observation using a timepoint specific lfdr
 shrunken_timecourse_estimates <- lapply(timepoint_lists, function(a_time_set) {
   a_time_set$lfdr <- qvalue::lfdr(a_time_set$p_norm, pi0 = pi_zero_by_t$fpi0[pi_zero_by_t$z0 == a_time_set$time[1]])
   a_time_set
 }) %>%
   dplyr::bind_rows() %>%
-  dplyr::mutate(shrunken_log2_ratio = log2_ratio * (1-lfdr)) %>%
-  dplyr::select(TF:gene, tc_level_hard = log2_ratio, tc_level_soft = shrunken_log2_ratio)
+  dplyr::mutate(shrunken_fold_change = fold_change * (1-lfdr))
 ```
 
-```{r}
-tc_distances <- shrunken_timecourse_estimates %>%
-  dplyr::group_by(TF, strain, date, restriction, mechanism, gene) %>%
-  dplyr::arrange(desc(time)) %>%
-  dplyr::slice(1) %>%
-  dplyr::summarize(final_zero_pt = ifelse(tc_level_soft == 0, TRUE, FALSE)) %>%
-  dplyr::left_join(overall_timecourse_signal, by = c("TF", "strain", "date", "restriction", "mechanism", "gene"))
-ggplot(tc_distances, aes(x = q_chisq, y = ..density.., fill =  final_zero_pt)) +
-  geom_density(alpha = 0.5)
+```{r tc_shrinkage_examples, fig.height = 6, fig.width = 6}
+shrunken_timecourse_estimates %>%
+  inner_join(example_tcs, by = "tc_id") %>%
+  dplyr::bind_rows(tibble::tibble(time = 0,
+                                  label = as.character(1:5),
+                                  sim_fit = 0,
+                                  shrunken_fold_change = 0)) %>%
+  dplyr::arrange(label, time) %>%
+  ggplot(aes(x = time, color = label)) +
+  geom_path(aes(y = sim_fit, group = label)) +
+  geom_point(aes(y = shrunken_fold_change)) +
+  scale_y_continuous("Shrunken Fold-Change") +
+  scale_color_brewer("Example Timecourse", palette = "Set2") +
+  ggtitle("Simulated timecourses containing signal", "line: true values, points: observed values") +
+  theme(legend.position = "bottom")
 ```
-
-
-```{r}
-ggplot(shrunken_timecourse_estimates %>%
-         dplyr::sample_n(2000), aes(x = tc_level_hard, y = tc_level_soft)) +
-  geom_abline(intercept = 0, slope = 1) +
-  geom_point(size = 0.2, color = "RED") +
-  facet_wrap(~ time) +
-  coord_cartesian(xlim = c(-4,4), ylim = c(-4,4)) +
-  theme_minimal()
-```
-
