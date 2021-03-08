@@ -1,0 +1,146 @@
+---
+title: "Multi-Omics Simulation"
+author: "Sean Hackett"
+date: "3/8/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+This simulation will attempt to construct a very rough model of a multi-omic regulatory network. This can be used to demonstrate concepts such as:
+
+- Measuring regulators rather than using latent variables results in conditionally-independent inference.
+
+Factors to include a general simulation:
+
+- transcripts:
+  - regulated by proteins > metabolites 
+  - modify their cognate protein
+- proteins
+  - regulated by cognate transcript > proteins = metabolites
+- metabolites
+  - This can include other chemical/physical "global effect" such as chromatin state or cellular pH. 
+  - regulated by proteins and metabolites
+  - modify proteins (structure or activity) >> transcripts
+
+The connections are informed by:
+
+- Non-cognate interactions will generally exhibit preferentially attachment and follow a power-law degree distribution.
+- Effect sizes can be simulated independently of network topology.
+
+```{r env_setup, message = FALSE}
+library(dplyr)
+library(ggplot2)
+library(ggraph) # to plot network elements
+```
+
+```{r}
+n_genes <- 200
+metab_frac <- 0.3
+n_metabolites <- n_genes * 0.3
+n_species <- n_genes * 2 + n_metabolites # genes are doubled up because: 1 transcript + 1 protein
+
+net_connections <- igraph::sample_pa(n_species,
+                                     power = 1,
+                                     m = 2)
+```
+
+```{r}
+edge_counts <- igraph::degree(net_connections) %>%
+  table() %>%
+  {tibble::tibble(degree = names(.),
+                  count = unname(.))} %>%
+  dplyr::mutate_all(as.integer)
+
+ggplot(edge_counts, aes(x = degree, y = count)) +
+  geom_point() +
+  scale_x_log10() +
+  scale_y_log10()
+```
+
+## Assign simulated nodes to molecules
+
+```{r}
+species_init <- dplyr::bind_rows(
+  tibble::tibble(gene_id = 1:n_genes,
+                 species_type = "transcript"),
+  tibble::tibble(gene_id = 1:n_genes,
+                 species_type = "protein"),
+  tibble::tibble(gene_id = NA_integer_,
+                 species_type = rep("metabolite", n_metabolites))
+) %>%
+  dplyr::mutate(species_id = sample(1:n_species))
+
+# edge_plausibility
+edge_plausibility <- tibble::tribble(~ from_type, ~ to_type, ~ interaction_type, ~ plausibility,
+                "transcript", "transcript", NA_character_, 0,
+                "transcript", "protein", NA_character_, 0,
+                "transcript", "metabolite", NA_character_, 0,
+                "protein", "transcript", "TF", 1,
+                "protein", "protein", "PPI", 0.5,
+                "protein", "metabolite", "enzyme", 1,
+                "metabolite", "transcript", "MDI", 0.2,
+                "metabolite", "protein", "MPI", 1,
+                "metabolite", "metabolite", "interconversion", 1)
+                
+edges_df <- igraph::as_data_frame(net_connections) %>%
+  tibble::as_tibble() %>%
+  dplyr::rename(from = to, to = from) %>%
+  dplyr::mutate_all(as.integer) %>%
+  dplyr::left_join(species_init %>%
+                    dplyr::select(from = species_id, from_type = species_type),
+                  by = "from") %>%
+  dplyr::left_join(species_init %>%
+                    dplyr::select(to = species_id, to_type = species_type),
+                  by = "to") %>%
+  dplyr::left_join(edge_plausibility, by = c("from_type", "to_type")) %>%
+  # cull edges based on plausibility
+  dplyr::filter(plausibility != 0) %>%
+  dplyr::group_by(from, interaction_type) %>%
+  dplyr::mutate(plausible = sample(c(TRUE, FALSE), size = 1, prob = c(plausibility[1], 1-plausibility[1]))) %>%
+  dplyr::ungroup() %>%
+  dplyr::filter(plausible) %>%
+  dplyr::select(from, to, interaction_type) %>%
+  # add cognate edges
+  dplyr::bind_rows(
+    species_init %>%
+      dplyr::filter(species_type != "metabolite") %>%
+      tidyr::spread(species_type, species_id) %>%
+      dplyr::select(from = transcript, to = protein) %>%
+      dplyr::mutate(interaction_type = "cognate")
+  )
+  
+species_df = species_init %>%
+  dplyr::select(species_id, species_type) %>%
+  dplyr::arrange(species_id)
+
+pruned_network <- igraph::graph_from_data_frame(edges_df,
+                                                directed = TRUE,
+                                                vertices = species_df)
+```
+
+```{r}
+edges_df %>%
+  dplyr::count(interaction_type) %>%
+  knitr::kable() %>%
+  kableExtra::kable_styling(bootstrap_options = "striped", full_width = F, position = "left")
+```
+
+```{r}
+work_with_top_cluster <- TRUE
+if (work_with_top_cluster) {
+  network_clusters <- igraph::clusters(pruned_network)
+  isolated_vertices <- names(network_clusters$membership)[network_clusters$membership != which.max(network_clusters$csize)]
+  
+  pruned_network <- igraph::delete_vertices(pruned_network, isolated_vertices)
+}
+
+ggraph(pruned_network, layout = "kk") +
+  geom_edge_link(arrow = arrow(type = "closed", length = unit(0.07, "inches")), color = "gray50", alpha = 0.5) +
+  geom_node_point(aes(color = species_type)) +
+  scale_color_brewer("Species Type", palette = "Set2") +
+  theme_void() +
+  theme(legend.position = "bottom")
+```
