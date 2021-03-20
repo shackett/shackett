@@ -155,6 +155,16 @@ reffect <- function (n, mean = 0.5, shape = 10) {
   effect <- magnitudes * (rbinom(n, 1, 0.5) - 0.5)*2
 }
 
+states <- rep(1, nrow(species_df))
+
+pars <- edges_df %>%
+  dplyr::mutate(effect = reffect(n()),
+                effect = ifelse(interaction_type == "cognate", abs(effect), effect))
+
+ggplot(pars, aes(x = effect, fill = interaction_type)) +
+  geom_histogram(binwidth = 0.1)
+
+
 Deffects <- function(time, states, pars, species_df, basal_prod = 0.2, loss_rate = 0.2) {
   
   reg_states <- tibble::tibble(value = states) %>%
@@ -174,23 +184,16 @@ Deffects <- function(time, states, pars, species_df, basal_prod = 0.2, loss_rate
                   loss = -1 * value * loss_rate,
                   deriv = net_effect + basal_synthesis + loss)
   
-  return (as.list(reg_states$deriv))
+  state_derivs <- list(reg_states$deriv)
+  
+  return (state_derivs)
   
 }
 
-states <- rep(1, nrow(species_df))
-
-pars <- edges_df %>%
-  dplyr::mutate(effect = reffect(n()),
-                effect = ifelse(interaction_type == "cognate", abs(effect), effect))
-
-ggplot(pars, aes(x = effect, fill = interaction_type)) +
-  geom_histogram(binwidth = 0.1)
-
-ode(y = rep(1, nrow(species_df)),
+ode_sim <- ode(y = states,
     times = seq(0, 20, by = 0.1),
     func = Deffects,
-    pars,
+    parms = pars,
     species_df = species_df)
 
 
