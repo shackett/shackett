@@ -37,7 +37,7 @@ library(ggraph) # to plot network elements
 ```
 
 ```{r}
-n_genes <- 200
+n_genes <- 20
 metab_frac <- 0.3
 n_metabolites <- n_genes * 0.3
 n_species <- n_genes * 2 + n_metabolites # genes are doubled up because: 1 transcript + 1 protein
@@ -125,7 +125,7 @@ pruned_network <- igraph::graph_from_data_frame(edges_df,
 edges_df %>%
   dplyr::count(interaction_type) %>%
   knitr::kable() %>%
-  kableExtra::kable_styling(bootstrap_options = "striped", full_width = F, position = "left")
+  kableExtra::kable_styling(bootstrap_options = "striped", full_width = FALSE, position = "left")
 ```
 
 ```{r}
@@ -143,4 +143,55 @@ ggraph(pruned_network, layout = "kk") +
   scale_color_brewer("Species Type", palette = "Set2") +
   theme_void() +
   theme(legend.position = "bottom")
+```
+
+## Simulating a dynamic dataset
+
+```{r}
+library(deSolve)
+
+reffect <- function (n, mean = 0.5, shape = 10) {
+  magnitudes <- rgamma(n, shape = shape, scale = mean / shape)
+  effect <- magnitudes * (rbinom(n, 1, 0.5) - 0.5)*2
+}
+
+Deffects <- function(time, states, pars, species_df, basal_prod = 0.2, loss_rate = 0.2) {
+  
+  reg_states <- tibble::tibble(value = states) %>%
+    dplyr::mutate(species_id = 1:n()) %>%
+    dplyr::left_join(species_df, by = "species_id")
+  
+  modulated <- pars %>%
+    dplyr::left_join(reg_states, by = c("from" = "species_id")) %>%
+    dplyr::group_by(to) %>%
+    dplyr::summarize(net_effect = sum(value * effect))
+  
+  reg_states <- reg_states %>%
+    dplyr::left_join(modulated, by = c("species_id" = "to")) %>%
+    dplyr::mutate(net_effect = ifelse(is.na(net_effect), 0, net_effect),
+                  # basal production
+                  basal_synthesis = ifelse(species_type == "protein", 0, basal_prod),
+                  loss = -1 * value * loss_rate,
+                  deriv = net_effect + basal_synthesis + loss)
+  
+  return (as.list(reg_states$deriv))
+  
+}
+
+states <- rep(1, nrow(species_df))
+
+pars <- edges_df %>%
+  dplyr::mutate(effect = reffect(n()),
+                effect = ifelse(interaction_type == "cognate", abs(effect), effect))
+
+ggplot(pars, aes(x = effect, fill = interaction_type)) +
+  geom_histogram(binwidth = 0.1)
+
+ode(y = rep(1, nrow(species_df)),
+    times = seq(0, 20, by = 0.1),
+    func = Deffects,
+    pars,
+    species_df = species_df)
+
+
 ```
