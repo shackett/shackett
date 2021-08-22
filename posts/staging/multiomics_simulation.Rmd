@@ -147,6 +147,13 @@ ggraph(pruned_network, layout = "kk") +
 
 ## Simulating a dynamic dataset
 
+$$
+\frac{dS_{i}}{dt} = \sum_{j}\alpha_{ji}S_{j} + C - \lambda S_{i}
+$$
+$$
+\frac{dS_{i}}{dt} = C e^{\sum_{j}\alpha_{ji}S_{j}} - \lambda S_{i}
+$$
+
 ```{r}
 library(deSolve)
 
@@ -176,13 +183,20 @@ Deffects <- function(time, states, pars, species_df, basal_prod = 0.2, loss_rate
     dplyr::group_by(to) %>%
     dplyr::summarize(net_effect = sum(value * effect))
   
+  # reg_states <- reg_states %>%
+  #   dplyr::left_join(modulated, by = c("species_id" = "to")) %>%
+  #   dplyr::mutate(net_effect = ifelse(is.na(net_effect), 0, net_effect),
+  #                 # basal production
+  #                 basal_synthesis = ifelse(species_type == "protein", 0, basal_prod),
+  #                 loss = -1 * value * loss_rate,
+  #                 deriv = net_effect + basal_synthesis + loss)
+  
   reg_states <- reg_states %>%
     dplyr::left_join(modulated, by = c("species_id" = "to")) %>%
     dplyr::mutate(net_effect = ifelse(is.na(net_effect), 0, net_effect),
                   # basal production
-                  basal_synthesis = ifelse(species_type == "protein", 0, basal_prod),
                   loss = -1 * value * loss_rate,
-                  deriv = net_effect + basal_synthesis + loss)
+                  deriv = basal_prod * exp(net_effect) + loss)
   
   state_derivs <- list(reg_states$deriv)
   
@@ -196,5 +210,10 @@ ode_sim <- ode(y = states,
     parms = pars,
     species_df = species_df)
 
+simulated_dynamics <- ode_sim %>%
+  as.data.frame() %>%
+  tidyr::gather(species_id, value, -time) %>%
+  tibble::as_tibble()
 
+simulated_dynamics
 ```

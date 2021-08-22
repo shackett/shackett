@@ -1,0 +1,98 @@
+---
+title: "Molecular Mediation"
+author: "Shackett"
+date: "4/14/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r env, message = FALSE}
+library(dplyr)
+library(ggplot2)
+```
+
+
+## Two factors: {A, B}
+
+### Truth A -> B
+
+```{r simulate_a_b}
+N <- 10000
+
+dat <- tibble(A = rnorm(N)) %>%
+  mutate(B = rnorm(N, mean = A))
+
+ggplot(dat, aes(x = A, y = B)) +
+  geom_point()
+```
+
+$$
+\begin{aligned}
+A &\sim \mathcal{N}(0, \sigma^{2}_{\epsilon})\\
+B &\sim \mathcal{N}(A, \sigma^{2}_{\epsilon})
+\end{aligned}
+$$
+
+```{r a_b_hists}
+stacked_A_B <- dat %>%
+  tidyr::gather(variable)
+
+stacked_A_B %>%
+  ggplot(aes(x = value)) +
+  geom_histogram() +
+  facet_grid(variable ~ .)
+
+stacked_A_B %>%
+  dplyr::group_by(variable) %>%
+  dplyr::summarize(Var = var(value))
+```
+
+$$
+\sigma^{2} = \text{bias}^{2} + \sigma^{2}_{\epsilon}
+$$
+### Comparing A -> B vs. B -> A
+
+Including a true (or false) upstream predictor 
+
+```{r conditioning}
+A_given_B <- lm(A ~ B, dat)
+summary(A_given_B)
+
+B_given_A <- lm(B ~ A, dat)
+summary(B_given_A)
+```
+
+```{r}
+dat_conditioned <- dat %>%
+  dplyr::mutate(A_given_B = A_given_B$resid,
+                B_given_A = B_given_A$resid) %>%
+  dplyr::select(A_given_B, B_given_A) %>%
+  tidyr::gather(relationship)
+
+ggplot(dat_conditioned, aes(x = value)) +
+  geom_histogram() +
+  facet_grid(relationship ~ .)
+
+dat_conditioned %>%
+  dplyr::group_by(relationship) %>%
+  dplyr::summarize(Var = var(value))
+```
+
+B conditioned on A decreases variance
+
+$$
+\begin{aligned}
+B &\sim \mathcal{N}(A, \sigma^{2}_{\epsilon})\\
+B | A &= B - A\hat{\beta}\\
+\text{Var}(B | A) &\approx \sigma^{2}_{\epsilon}
+\end{aligned}
+$$
+
+But, A given B also decreases variance ...
+
+B captures half of the variability in A, and is thus a good predictor of A as well.
+
+This is why mediation frequently focuses on situations where at most one direction of causality is likely. In mendelian randomization this is because the consequences of a genetic variant cannot shape the variant itself. Similary, transcripts affect their cognate protein via the inevitable process of translation, while proteins affecting their cognate transcript would occur through more complex, and rare auto-regulatory mechanisms.
