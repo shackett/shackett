@@ -1,8 +1,10 @@
 ---
 title: "Time zero normalization with the Multivariate Gaussian distribution"
-author: "Sean Hackett"
-date: "1/14/2021"
-output: html_document
+description: "Scraping a large database of MMA fights using rvest"
+author: sean
+layout: post
+comments: true
+tags: [rvest, database]
 ---
 
 ```{r setup, include=FALSE}

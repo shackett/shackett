@@ -1,0 +1,32 @@
+---
+title: "Romic"
+description: "An R package for exploratory data analysis of high-dimensional datasets"
+author: sean
+layout: post
+comments: true
+tags: [R, software]
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Romic is an R package, which I developed, that is now is now available on [CRAN](https://cran.r-project.org/web/packages/romic/index.html). There is already a nice README for romic on [GitHub](https://github.com/calico/romic) and [pkgdown site](https://calico.github.io/romic/articles/romic.html), so here, I will add some context regarding the problems this package addresses.
+
+The first problem we'll consider is that genomics data analysis involves a lot of shuffling between various forms of wide and tall data and incrementally tacking on attributes as needed. Romic aims to simplify this process, by providing a set of flexible data structures that accommodate a range of measurements and metadata and can be readily interconverted based on the needs of an analysis.
+
+The second challenge we'll contend with is decreasing the time it takes to generate a plot so that mechanics of plotting rarely interrupt the thought process of data interpretation. Building upon romic's data structure, the meaning of variables (feature-, sample-, measurement-level) are encoded in a schema, so they can be appropriately surfaced to filter or reorder a dataset, and add ggplot2 aesthetics. Interactivity is facilitated using shiny apps composed from romic-centric shiny modules.
+
+Both of these solutions increase the speed, clarity, and succinctness of analysis. I've developed and will continue to refine this package to save myself (and hopefully others!) time. 
+
+While, romic is discussed in the parlance of genomics, romic's data structures are useful for any moderately sized feature-level data, and its interactive visualizations can be used for any data with dense continuous measurements. Because of its generality, romic serves as a useful underlying data structure that can be combined with application-specific schemas and methods to create powerful, succinct workflows. One such application that I'll discuss in a future post, is the [claman](https://github.com/calico/claman) R package which builds upon romic to create an opinionated workflow for mass spectrometry data analysis.
+
+# Data Structures for Genomics
+
+## Conventional Formatting
+
+- read wide data with sample headers
+
+# Plotting At the Tips of Your Fingers
+
+## Deploying a shiny app to shinyapps.io
