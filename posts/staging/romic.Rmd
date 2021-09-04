@@ -13,7 +13,7 @@ knitr::opts_chunk$set(echo = TRUE)
 
 Romic is an R package, which I developed, that is now is now available on [CRAN](https://cran.r-project.org/web/packages/romic/index.html). There is already a nice README for romic on [GitHub](https://github.com/calico/romic) and [pkgdown site](https://calico.github.io/romic/articles/romic.html), so here, I will add some context regarding the problems this package addresses.
 
-The first problem we'll consider is that genomics data analysis involves a lot of shuffling between various forms of wide and tall data and incrementally tacking on attributes as needed. Romic aims to simplify this process, by providing a set of flexible data structures that accommodate a range of measurements and metadata and can be readily interconverted based on the needs of an analysis.
+The first problem we'll consider is that genomics data analysis involves a lot of shuffling between various forms of wide and tall data and incrementally tacking on attributes as needed. Romic aims to simplify this process, by providing a set of flexible data structures that accommodate a range of measurements and metadata and can be readily inter-converted based on the needs of an analysis. 
 
 The second challenge we'll contend with is decreasing the time it takes to generate a plot so that mechanics of plotting rarely interrupt the thought process of data interpretation. Building upon romic's data structure, the meaning of variables (feature-, sample-, measurement-level) are encoded in a schema, so they can be appropriately surfaced to filter or reorder a dataset, and add ggplot2 aesthetics. Interactivity is facilitated using shiny apps composed from romic-centric shiny modules.
 
@@ -25,7 +25,44 @@ While, romic is discussed in the parlance of genomics, romic's data structures a
 
 ## Conventional Formatting
 
-- read wide data with sample headers
+Datasets in genomics are generally generated and shared in wide formats (one row per gene, one column per sample), often with extra rows and columns added for feature and sample metadata. At first blush this is a good format, because it supports both folks who want to work with a matrix-level dataset as well as individuals who are interested in specific genes.
+
+That said, to manipulate and visualize such data requires integrating metadata with measurements. For example, when correcting for batch effects we often want to incorporate sample-level information, such as the date samples were collected. Combining numeric measurements with categorical and numeric meta-data is awkward in matrices. One could do this with attributes, but generally we would just maintain separate tables for samples, and features, since each variable in a table can have its own class. A benefit of this approach is that working with matrices can be very fast, while the major downsides are having to maintain multiple similar versions of a dataset, and being careful about maintaining the alignment of measurements, features, and samples.
+
+## Romic's Tabular Representations
+
+An alternative to manipulating matrices is to work fully with tabular data. This mode of operation is very similar to working with sql, allowing us to maintain a complex, yet organized dataset. Using tabular, tidy, data also allow us to tap into the expansive suite of tools in the tidyverse. Working with features, samples, and measurements tables allow us to separately modify each table, while the three tables can be combined (using primary key - foreign key relationships) if we need to add sample- or feature-level context to measurements. 
+
+Romic provides two data structures, a triple_omic an tidy_omic class for representing these two scenarios. These formats can be used interchangeable in romic's functions by treating them as a T*omics (tomic) meta-class. Most exported functions from romic, take a tomic object which means they can convert to whatever format makes most sense for a function under the hood and then return a triple_omic or tidy_omic object depending on the input type.
+
+Using a schema, tables can be combined and then broken apart again without constant guidance, and validators quickly flag data manipulation errors (such as non-unique primary keys, or measurements of the same sample with different sample attributes).
+
+By taking care of many of the joins and reshaping operations that we may have to do, romic helps to simplify analyses while avoid common data manipulation errors. It directly supports dplyr and some ggplot operations, while data can also be easily pulled out of the romic format (and then added back if desired) based on users' needs.
+
+## Let's format a dataset
+
+As a quick demo, we can look at published 
+
+```{r env_setup, message = FALSE}
+library(dplyr)
+library(romic)
+
+```
+
+
+
+```{r}
+gasche_2000 <- readr::read_tsv("http://www-genome.stanford.edu/yeast_stress/data/rawdata/complete_dataset.txt")
+gasche_matrix <- gasche_2000 %>%
+  dplyr::select(-UID, -NAME, -GWEIGHT) %>%
+  as.matrix()
+rownames(gasche_matrix) <- gasche_2000$UID
+
+print(dim(gasche_matrix))
+```
+
+
+
 
 # Plotting At the Tips of Your Fingers
 
