@@ -26,7 +26,8 @@ dat <- tibble(A = rnorm(N)) %>%
   mutate(B = rnorm(N, mean = A))
 
 ggplot(dat, aes(x = A, y = B)) +
-  geom_point()
+  geom_hex(bins = 60) +
+  scale_fill_viridis_c(option = "plasma", trans = "sqrt")
 ```
 
 $$
@@ -96,3 +97,52 @@ But, A given B also decreases variance ...
 B captures half of the variability in A, and is thus a good predictor of A as well.
 
 This is why mediation frequently focuses on situations where at most one direction of causality is likely. In mendelian randomization this is because the consequences of a genetic variant cannot shape the variant itself. Similary, transcripts affect their cognate protein via the inevitable process of translation, while proteins affecting their cognate transcript would occur through more complex, and rare auto-regulatory mechanisms.
+
+## Three factors: {A, B, C}
+
+### Truth A -> B
+
+```{r simulate_a_b_c}
+N <- 10000
+
+dat <- tibble(A = rnorm(N)) %>%
+  mutate(
+    B = rnorm(N, mean = A),
+    C = rnorm(N, mean = B),
+    entry = 1:n()
+    )
+
+dat_bivariate_comparisons <- tibble(
+  key_1 = c("A", "A", "B"),
+  key_2 = c("B", "C", "C")
+  ) %>%
+  left_join(tidyr::gather(dat, key_1, val_1, -entry), by = "key_1") %>%
+  left_join(tidyr::gather(dat, key_2, val_2, -entry), by = c("entry", "key_2"))
+
+ggplot(dat_bivariate_comparisons, aes(x = val_1, y = val_2)) +
+  geom_hex(bins = 60) +
+  facet_grid(key_2 ~  key_1) +
+  scale_fill_viridis_c(option = "plasma", trans = "sqrt")
+```
+
+
+
+### Comparing A -> C vs. A -> B -> C
+
+```{r conditioning}
+# A predicts C
+C_given_A <- lm(C ~ A, dat)
+summary(C_given_A)
+
+# unless we include B; C is conditionally independent of A given B
+C_given_BA <- lm(C ~ B + A, dat)
+summary(C_given_BA)
+
+# this is also true if we we considered A being impacted by A
+summary(lm(A ~ B + C, dat))
+summary(lm(A ~ C, dat))
+
+# but, if we can indicate that A -> B, and B -/-> A
+
+
+```

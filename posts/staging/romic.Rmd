@@ -54,16 +54,123 @@ library(romic)
 ```{r}
 gasche_2000 <- readr::read_tsv("http://www-genome.stanford.edu/yeast_stress/data/rawdata/complete_dataset.txt")
 gasche_matrix <- gasche_2000 %>%
-  dplyr::select(-UID, -NAME, -GWEIGHT) %>%
+  select(-UID, -NAME, -GWEIGHT) %>%
   as.matrix()
 rownames(gasche_matrix) <- gasche_2000$UID
 
 print(dim(gasche_matrix))
 ```
 
+### Process metadata
 
+#### Genes
+
+```{r feature_metadata}
+goslim_mappings <- readr::read_tsv(
+    "https://downloads.yeastgenome.org/curation/literature/go_slim_mapping.tab",
+    col_names = c("ORF", "common", "SGD", "category", "geneset", "GO", "class")
+  ) %>%
+  select(-GO) %>%
+  group_by(ORF, category) %>%
+  slice(1) %>%
+  tidyr::spread(category, geneset) %>%
+  select(
+    ORF, common, SGD, class,
+    cellular_compartment = C,
+    molecular_function = F,
+    biological_process = P
+  ) %>%
+  ungroup()
+
+feature_metadata <- gasche_2000 %>%
+  select(UID) %>%
+  left_join(goslim_mappings, by = c("UID" = "ORF"))
+```
+
+#### Samples
+
+```{r}
+library(stringr)
+
+experiment_labels <- tibble::tibble(sample = colnames(gasche_matrix)) %>%
+  mutate(experiment = case_when(
+    str_detect(sample, "hs\\-1") ~ "Heat Shock (A) (duration)",
+    str_detect(sample, "hs\\-2") ~ "Heat Shock (B) (duration)",
+    str_detect(sample, "^37C to 25C") ~ "Cold Shock (duration)",
+    str_detect(sample, "^heat shock") ~ "Heat Shock (severity)",
+    str_detect(sample, "^29C to 33C") ~ "29C to 33C (duration)",
+    str_detect(sample, "^29C \\+1M sorbitol to 33C \\+ 1M sorbitol") ~ "29C + Sorbitol to 33C + Sorbitol (duration)",
+    str_detect(sample, "^29C \\+1M sorbitol to 33C \\+ \\*NO sorbitol") ~ "29C + Sorbitol to 33C (duration)",
+    str_detect(sample, "^constant 0.32 mM H2O2") ~ "Hydrogen peroxide (duration)",
+    str_detect(sample, "^1 ?mM Menadione") ~ "Menadione (duration)",
+    str_detect(sample, "^2.5mM DTT") ~ "DTT (A) (duration)",
+    str_detect(sample, "^dtt") ~ "DTT (B) (duration)",
+    str_detect(sample, "diamide") ~ "Diamide (duration)",
+    str_detect(sample, "^1M sorbitol") ~ "Sorbitol (duration)",
+    str_detect(sample, "^Hypo-osmotic shock") ~ "Hypo-Osmotic Shock (duration)",
+    str_detect(sample, "^aa starv") ~ "Amino Acid Starvation (duration)",
+    str_detect(sample, "^Nitrogen Depletion") ~ "Nitrogen Depletion (duration)",
+    str_detect(sample, "^[Dd]iauxic [Ss]hift") ~ "Diauxic Shift (duration)",
+    str_detect(sample, "ypd-2") ~ "YPD (duration)",
+    str_detect(sample, "ypd-1") ~ "YPD stationary phase (duration)",
+    str_detect(sample, "overexpression") ~ "TF Overexpression",
+    str_detect(sample, "car-1") ~ "Carbon Sources (A)",
+    str_detect(sample, "car-2") ~ "Carbon Sources (B)",
+    str_detect(sample, "ct-1") ~ "Temperature Gradient",
+    str_detect(sample, "ct-2") ~ "Temperature Gradient, Steady State"
+    )) %>%
+  group_by(experiment) %>%
+  mutate(experiment_order = 1:n()) %>%
+  ungroup() %>%
+  mutate(
+    experiment_order = ifelse(is.na(experiment), NA, experiment_order),
+    experiment = ifelse(is.na(experiment), "Other", experiment)
+  )
+```
+
+
+### Formatting for romic
+
+```{r}
+# tidy gasche measurements
+tall_gasche <- gasche_2000 %>%
+  select(-NAME, -GWEIGHT) %>%
+  tidyr::gather("sample", "expression", -UID)
+  
+triple_omic <- create_triple_omic(
+  measurement_df = tall_gasche,
+  feature_df = feature_metadata,
+  sample_df = experiment_labels,
+  feature_pk = "UID",
+  sample_pk = "sample"
+)
+```
 
 
 # Plotting At the Tips of Your Fingers
 
 ## Deploying a shiny app to shinyapps.io
+
+```{r pcs}
+triple_omic %>%
+  triple_to_tidy() %>%
+  app_pcs()
+```
+
+
+```{r}
+# filter to a few experiments for the demo
+heatshock_triple_omic <- triple_omic %>%
+  filter_tomic(
+    filter_type = "category",
+    filter_table = "samples",
+    filter_variable = "experiment",
+    filter_value = c(
+      "Heat Shock (A) (duration)",
+      "Heat Shock (B) (duration)",
+      "Heat Shock (severity)",
+      "Temperature Gradient"
+      ))
+
+app_heatmap(heatshock_triple_omic)
+```
