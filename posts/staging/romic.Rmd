@@ -172,5 +172,14 @@ heatshock_triple_omic <- triple_omic %>%
       "Temperature Gradient"
       ))
 
+imputed_dat <- impute.knn(gasche_matrix)
+
+# remotes::install_bioc("impute")
+romic::remove_missing_values(
+  heatshock_triple_omic,
+  value_var = "expression",
+  missing_val_method = "impute"
+  )
+
 app_heatmap(heatshock_triple_omic)
 ```
