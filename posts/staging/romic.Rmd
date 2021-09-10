@@ -131,7 +131,9 @@ experiment_labels <- tibble::tibble(sample = colnames(gasche_matrix)) %>%
 
 ### Formatting for romic
 
-```{r}
+
+
+```{r romic_fomratting}
 # tidy gasche measurements
 tall_gasche <- gasche_2000 %>%
   select(-NAME, -GWEIGHT) %>%
@@ -146,21 +148,26 @@ triple_omic <- create_triple_omic(
 )
 ```
 
-
 # Plotting At the Tips of Your Fingers
+
+When its inefficient to explore a dataset, analyses will either be cursory or take longer than it should. While creating bespoke plots that explore specific aspects of a dataset are difficult to automate, the early stages of data analysis should be.
+
 
 ## Deploying a shiny app to shinyapps.io
 
 ```{r pcs}
-triple_omic %>%
-  triple_to_tidy() %>%
-  app_pcs()
+imputed_triple <- triple_omic %>%
+  # overwrite existing expression so that we don't thave the
+  # raw expression changes which contains lots of missing values
+  impute_missing_values(impute_var_name = "expression")
+
+app_pcs(imputed_triple)
 ```
 
 
 ```{r}
 # filter to a few experiments for the demo
-heatshock_triple_omic <- triple_omic %>%
+heatshock_triple_omic <- imputed_triple %>%
   filter_tomic(
     filter_type = "category",
     filter_table = "samples",
@@ -172,14 +179,5 @@ heatshock_triple_omic <- triple_omic %>%
       "Temperature Gradient"
       ))
 
-imputed_dat <- impute.knn(gasche_matrix)
-
-# remotes::install_bioc("impute")
-romic::remove_missing_values(
-  heatshock_triple_omic,
-  value_var = "expression",
-  missing_val_method = "impute"
-  )
-
-app_heatmap(heatshock_triple_omic)
+app_heatmap(imputed_triple)
 ```
