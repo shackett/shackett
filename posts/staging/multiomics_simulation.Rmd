@@ -37,7 +37,7 @@ library(ggraph) # to plot network elements
 ```
 
 ```{r}
-n_genes <- 20
+n_genes <- 100
 metab_frac <- 0.3
 n_metabolites <- n_genes * 0.3
 n_species <- n_genes * 2 + n_metabolites # genes are doubled up because: 1 transcript + 1 protein
@@ -169,8 +169,8 @@ pars <- edges_df %>%
                 effect = ifelse(interaction_type == "cognate", abs(effect), effect))
 
 ggplot(pars, aes(x = effect, fill = interaction_type)) +
-  geom_histogram(binwidth = 0.1)
-
+  geom_histogram(binwidth = 0.1) 
+  
 
 Deffects <- function(time, states, pars, species_df, basal_prod = 0.2, loss_rate = 0.2) {
   
@@ -203,9 +203,16 @@ Deffects <- function(time, states, pars, species_df, basal_prod = 0.2, loss_rate
   return (state_derivs)
   
 }
+```
+
+```{r}
+
+# since production and degradation rates are not balanced initially
+# we can simulate from initial conditions to find pre-perturbation initial steady state
+max_time <- 100
 
 ode_sim <- ode(y = states,
-    times = seq(0, 20, by = 0.1),
+    times = seq(0, max_time, by = 0.1),
     func = Deffects,
     parms = pars,
     species_df = species_df)
@@ -215,5 +222,32 @@ simulated_dynamics <- ode_sim %>%
   tidyr::gather(species_id, value, -time) %>%
   tibble::as_tibble()
 
+simulated_dynamics %>%
+  dplyr::semi_join(
+    simulated_dynamics %>%
+      dplyr::distinct(species_id) %>%
+      dplyr::sample_n(10),
+    by = "species_id"
+  ) %>%
+  ggplot(aes(x = time, y = value)) +
+  geom_path() +
+  facet_wrap(~ species_id)
+  
+# check for a steady state
 simulated_dynamics
+
+time_derivatives <- simulated_dynamics %>%
+  dplyr::filter(time > max_time - 1) %>%
+  dplyr::arrange(time) %>%
+  tidyr::nest(vals = -species_id) %>%
+  dplyr::mutate(mean_D = purrr::map_dbl(
+    vals,
+    function(x) {mean(diff(x$value))}
+  ))
+
+stopifnot(all(!is.na(time_derivatives$mean_D)))
+
+time_derivatives %>%
+  ggplot(aes(x = mean_D)) +
+  geom_histogram()
 ```
