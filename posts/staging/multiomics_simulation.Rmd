@@ -150,9 +150,17 @@ ggraph(pruned_network, layout = "kk") +
 $$
 \frac{dS_{i}}{dt} = \sum_{j}\alpha_{ji}S_{j} + C - \lambda S_{i}
 $$
+This is no good, values -> < 0
+
 $$
 \frac{dS_{i}}{dt} = C e^{\sum_{j}\alpha_{ji}S_{j}} - \lambda S_{i}
 $$
+This is no good, values blow up to Inf
+
+$$
+\frac{dS_{k}}{dt} = \prod_{i \in \text{inhibitors}} \frac{k_i}{k_{i} + S_i}\prod_{a \in \text{activators}} \left( 1 + \frac{S_{a}}{k_{a}}\right) - \lambda S_{i}
+$$
+
 
 ```{r}
 library(deSolve)
@@ -165,14 +173,19 @@ reffect <- function (n, mean = 0.5, shape = 10) {
 states <- rep(1, nrow(species_df))
 
 pars <- edges_df %>%
-  dplyr::mutate(effect = reffect(n()),
-                effect = ifelse(interaction_type == "cognate", abs(effect), effect))
-
+  dplyr::mutate(
+    effect = reffect(n()),
+    effect = ifelse(interaction_type == "cognate", abs(effect), effect),
+    # transform to Ka and Kd for saturable rate equations
+    act_or_inh = ifelse(effect < 0, "inhibitor", "activator"),
+    dissoc_constant = exp(effect)
+  )
+    
 ggplot(pars, aes(x = effect, fill = interaction_type)) +
   geom_histogram(binwidth = 0.1) 
   
 
-Deffects <- function(time, states, pars, species_df, basal_prod = 0.2, loss_rate = 0.2) {
+Deffects <- function(time, states, pars, species_df, basal_prod = 0.2, loss_rate = 1) {
   
   reg_states <- tibble::tibble(value = states) %>%
     dplyr::mutate(species_id = 1:n()) %>%
@@ -180,8 +193,12 @@ Deffects <- function(time, states, pars, species_df, basal_prod = 0.2, loss_rate
   
   modulated <- pars %>%
     dplyr::left_join(reg_states, by = c("from" = "species_id")) %>%
+    dplyr::mutate(rel_rate = dplyr::case_when(
+      act_or_inh == "inhibitor" ~  dissoc_constant / (dissoc_constant + value),
+      act_or_inh == "activator" ~  1 + value / dissoc_constant
+      )) %>%
     dplyr::group_by(to) %>%
-    dplyr::summarize(net_effect = sum(value * effect))
+    dplyr::summarize(rate = prod(rel_rate))
   
   # reg_states <- reg_states %>%
   #   dplyr::left_join(modulated, by = c("species_id" = "to")) %>%
@@ -193,10 +210,10 @@ Deffects <- function(time, states, pars, species_df, basal_prod = 0.2, loss_rate
   
   reg_states <- reg_states %>%
     dplyr::left_join(modulated, by = c("species_id" = "to")) %>%
-    dplyr::mutate(net_effect = ifelse(is.na(net_effect), 0, net_effect),
+    dplyr::mutate(rate = ifelse(is.na(rate), 1, rate),
                   # basal production
                   loss = -1 * value * loss_rate,
-                  deriv = basal_prod * exp(net_effect) + loss)
+                  deriv = basal_prod + rate + loss)
   
   state_derivs <- list(reg_states$deriv)
   
@@ -231,23 +248,52 @@ simulated_dynamics %>%
   ) %>%
   ggplot(aes(x = time, y = value)) +
   geom_path() +
-  facet_wrap(~ species_id)
+  facet_wrap(~ species_id, scale = "free_y")
   
 # check for a steady state
-simulated_dynamics
-
 time_derivatives <- simulated_dynamics %>%
   dplyr::filter(time > max_time - 1) %>%
   dplyr::arrange(time) %>%
   tidyr::nest(vals = -species_id) %>%
-  dplyr::mutate(mean_D = purrr::map_dbl(
+  dplyr::mutate(assym_summary = purrr::map(
     vals,
-    function(x) {mean(diff(x$value))}
-  ))
+    function(x) {
+      tibble::tibble(
+        assym_value = mean(x$value),
+        mean_D = mean(diff(x$value))
+      )
+      }
+  )) %>%
+  dplyr::select(-vals) %>%
+  tidyr::unnest(assym_summary)
 
 stopifnot(all(!is.na(time_derivatives$mean_D)))
 
 time_derivatives %>%
   ggplot(aes(x = mean_D)) +
-  geom_histogram()
+  geom_histogram() +
+  ggtitle("Time derivates have shrunk to zero -> a steady state has been reached")
 ```
+
+### Now we can take the steady-state and add a genetic perturbation
+
+```{r}
+# now lets separately perturb each species
+
+dynamics_df <- time_derivatives %>%
+  dplyr::distinct(perturbation = species_id) %>%
+  tidyr::crossing(time_derivatives) %>%
+  # 20 X upregulation of a single feature
+  dplyr::mutate(timecourse_init = ifelse(perturbation == species_id, assym_value * 20, assym_value)) %>%
+  tidyr::nest(perturbation_dat = -perturbation)
+
+ode_sim <- ode(y = species_df$timecourse_init,
+    times = seq(0, 5, by = 0.1),
+    func = Deffects,
+    parms = pars,
+    species_df = species_df)
+
+
+
+```
+
