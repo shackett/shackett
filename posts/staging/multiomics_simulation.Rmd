@@ -9,9 +9,13 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-This simulation will attempt to construct a very rough model of a multi-omic regulatory network. This can be used to demonstrate concepts such as:
+This notebook contains a generative process for a multi-omic regulatory network and a simulated dataset of genetic perturbation experiments.
 
-- Measuring regulators rather than using latent variables results in conditionally-independent inference.
+Why is this helpful?
+- The generated dataset can be trained to infer cause->effect relationships from dynamics that can then be compared to the true relationships in the regulatory network.
+- We can mask certain molecular species (e.g., metabolites or proteins) so that they serve as unmeasured confounders. This can be used to evaluate causal inference methods sensitivity to mis-specification and can help to inform the overall value of collecting multiomic data (i.e., directly measure the metabolites and/or proteins).
+
+A multi-omic regulatory network contains multiple different classes of molecules and a set of directed edges between regulators and targets reflecting causal relationships. In a single 'omic model we want to treat all species equivalently, but in a multiomic model it makes sense to mold the relationships between molecules to better reflect known molecular biology.
 
 Factors to include a general simulation:
 
@@ -25,10 +29,13 @@ Factors to include a general simulation:
   - regulated by proteins and metabolites
   - modify proteins (structure or activity) >> transcripts
 
-The connections are informed by:
+To create a network featuring such interactions, we can start with a Barabasi-Albert model. In this model, molecular species are added one at a time and each time a new species is added it creates N connections to existing species. Since species added earlier will have more chances of being selected by newly added species they become more highly connected, exhibiting preferential attachment. This results in an overall degree distribution which follows a power-law distribution (to make the physicists happy).
 
-- Non-cognate interactions will generally exhibit preferentially attachment and follow a power-law degree distribution.
-- Effect sizes can be simulated independently of network topology.
+Updating this model so it conforms to the multiomics rules above can be done by pruning edges based on the overall feasibility of cross-class interactions and adding edges between all RNAs and the protein they encode.
+
+To simulate dynamics from this network we can write ODEs for each molecular species where all regulators of a given species are represented as activators or inhibitors. Without care such ODEs can easily explode to $\infty$ or drop to $\le 0$. To avoid this, we can use saturable rate equations like convenience kinetics, along with basal synthesis rates, and first order decay. This allows us to find the derivative of each species based on the current levels of all species and causal effect sizes.
+
+Iterating this system forward finds a steady-state of stable molecule abundances. We can then increase the basal synthesis of any given molecular species to create a synthetic induction experiment.
 
 ```{r env_setup, message = FALSE}
 library(dplyr)
