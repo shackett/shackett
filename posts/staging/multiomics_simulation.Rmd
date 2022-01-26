@@ -37,24 +37,28 @@ To simulate dynamics from this network we can write ODEs for each molecular spec
 
 Iterating this system forward finds a steady-state of stable molecule abundances. We can then increase the basal synthesis of any given molecular species to create a synthetic induction experiment.
 
+# Construct Ground Truth Network
+
+### Configure environment and global variables
+
 ```{r env_setup, message = FALSE}
 library(dplyr)
 library(ggplot2)
 library(ggraph) # to plot network elements
+library(deSolve) # for solving the system of differential equations
 ```
 
-```{r}
-n_genes <- 100
-metab_frac <- 0.3
-n_metabolites <- n_genes * 0.3
-n_species <- n_genes * 2 + n_metabolites # genes are doubled up because: 1 transcript + 1 protein
+## Create a first-pass Barabasi-Albert network
 
-net_connections <- igraph::sample_pa(n_species,
-                                     power = 1,
-                                     m = 2)
-```
+```{r setup_molecules, fig.height = 6, fig.width = 6}
+N_GENES <- 100
+METAB_FRAC <- 0.3
+n_metabolites <- N_GENES * METAB_FRAC
+n_species <- N_GENES * 2 + n_metabolites # genes are doubled up because: 1 transcript + 1 protein
 
-```{r}
+net_connections <- igraph::sample_pa(n_species, power = 1, m = 2)
+
+# summarize degrees
 edge_counts <- igraph::degree(net_connections) %>%
   table() %>%
   {tibble::tibble(degree = names(.),
@@ -65,16 +69,22 @@ ggplot(edge_counts, aes(x = degree, y = count)) +
   geom_point() +
   scale_x_log10() +
   scale_y_log10() +
-  ggtitle("Yay powerlaws")
+  ggtitle("Degree distribution of Barabasi-Albert network", subtitle = "Yay powerlaws") +
+  theme_bw()
 ```
 
-## Assign simulated nodes to molecules
+## Convert the preferential attachment network into a multiomic network
 
-```{r}
+1. vertices are randomly assigned as transcripts, proteins or metabolites
+2. interactions between pairs of vertices get a plausibility score (with more common types of interactions having a higher plausibility)
+3. edges are retained as Bernouli draws with $p$ = plausibility
+4. cognate edges from all transcripts to the protein they encode are added
+
+```{r }
 species_init <- dplyr::bind_rows(
-  tibble::tibble(gene_id = 1:n_genes,
+  tibble::tibble(gene_id = 1:N_GENES,
                  species_type = "transcript"),
-  tibble::tibble(gene_id = 1:n_genes,
+  tibble::tibble(gene_id = 1:N_GENES,
                  species_type = "protein"),
   tibble::tibble(gene_id = NA_integer_,
                  species_type = rep("metabolite", n_metabolites))
@@ -129,20 +139,12 @@ species_df = species_init %>%
     loss_rate = 1
   )
 
+# network summaries
 pruned_network <- igraph::graph_from_data_frame(edges_df,
                                                 directed = TRUE,
                                                 vertices = species_df)
-```
 
-```{r}
-edges_df %>%
-  dplyr::count(interaction_type) %>%
-  knitr::kable() %>%
-  kableExtra::kable_styling(bootstrap_options = "striped", full_width = FALSE, position = "left")
-```
-
-```{r}
-work_with_top_cluster <- TRUE
+work_with_top_cluster <- FALSE
 if (work_with_top_cluster) {
   network_clusters <- igraph::clusters(pruned_network)
   isolated_vertices <- names(network_clusters$membership)[network_clusters$membership != which.max(network_clusters$csize)]
@@ -150,53 +152,51 @@ if (work_with_top_cluster) {
   pruned_network <- igraph::delete_vertices(pruned_network, isolated_vertices)
 }
 
-ggraph(pruned_network, layout = "kk") +
+ggraph(pruned_network, layout = "fr") +
   geom_edge_link(arrow = arrow(type = "closed", length = unit(0.07, "inches")), color = "gray50", alpha = 0.5) +
   geom_node_point(aes(color = species_type)) +
   scale_color_brewer("Species Type", palette = "Set2") +
   theme_void() +
-  theme(legend.position = "bottom")
+  theme(legend.position = "bottom") +
+  ggtitle("Simulated multi-omic regulatory network")
+
+edges_df %>%
+  dplyr::count(interaction_type) %>%
+  knitr::kable(caption = "Types of interactions in regulatory network") %>%
+  kableExtra::kable_styling(bootstrap_options = "striped", full_width = FALSE, position = "left")
 ```
 
-## Simulating a dynamic dataset
+# Simulating Dynamics From a Regulatory Network
+
+## Convenience Kinetics
+
+To represent the regulatory network as a series of differential equations, we need an expression relating the rate of change of a query species to the levels of all of its regulators. Such an expression needs to work for 0+ regulators and also produce biologically feasible dynamics (zero molecules shoot to $\infty$ and molecules ideally shouldn't go to zero either). We can represent how a biochemical process is impacted by an arbitrary set of regulators using [convience kinetics](https://link.springer.com/article/10.1186/1742-4682-3-41).
+
+For systems that are just impacted by activation and inhibition (i.e., ignorning substrate <-> product interconversion), such an expression will look like:
 
 $$
-\frac{dS_{i}}{dt} = \sum_{j}\alpha_{ji}S_{j} + C - \lambda S_{i}
+\frac{dS_{k}}{dt} = \prod_{i \in \text{inhibitors}} \frac{k_i}{k_{i} + S_i}\prod_{a \in \text{activators}} \left( 1 + \frac{S_{a}}{k_{a}}\right)
 $$
-This is no good, values -> < 0
+Here, $S_{k}$ is the regulated species, $i$s index inhibitors and $a$s index activators. $k_{i}$ and $k_{a}$ are affinity constants reflecting half-max inhibition concentrations, and double activity concentrations respectively. (Note that this an atypical expression for activation but its nice here because it results in values > 1 while the alternative (S/(S + Ka)) results in values < 1.)
+
+Convenience kinetics allows us to define how a process scales with regulators but to improve its behavior we can add basal synthesis and first-order decay terms. Basal synthesis will keep a molecules concentration from dropping to zero. First-order decay (or alternatively washout) decreases concentration proportionally to the current concentration thereby keeping concentrations from shooting to $\infty$ (Note that this is still possible if a strong autoactivating circuit is created but this can be monitored.)
+
+Adding basal synthesis and washout terms to convenience kinetics yields the final ODE:
 
 $$
-\frac{dS_{i}}{dt} = C e^{\sum_{j}\alpha_{ji}S_{j}} - \lambda S_{i}
+\frac{dS_{k}}{dt} = \alpha + \prod_{i \in \text{inhibitors}} \frac{k_i}{k_{i} + S_i}\prod_{a \in \text{activators}} \left( 1 + \frac{S_{a}}{k_{a}}\right) - \lambda S_{k}
 $$
-This is no good, values blow up to Inf
+## Finding a pre-induction steady state
 
-$$
-\frac{dS_{k}}{dt} = \prod_{i \in \text{inhibitors}} \frac{k_i}{k_{i} + S_i}\prod_{a \in \text{activators}} \left( 1 + \frac{S_{a}}{k_{a}}\right) - \lambda S_{k}
-$$
+With these ODEs and initial concentrations of all molecular species (here set at 1) we can simulate the time evolution of the system. If we did a good job in defining the ODEs they should reach a steady-state which can be treated analagously to a pre-induction IDEA chemostat culture.
 
+### Add effect sizes
 
 ```{r}
-library(deSolve)
-
 reffect <- function (n, mean = 0.5, shape = 10) {
   magnitudes <- rgamma(n, shape = shape, scale = mean / shape)
   effect <- magnitudes * (rbinom(n, 1, 0.5) - 0.5)*2
 }
-
-states <- rep(1, nrow(species_df))
-
-pars <- edges_df %>%
-  dplyr::mutate(
-    effect = reffect(n()),
-    effect = ifelse(interaction_type == "cognate", abs(effect), effect),
-    # transform to Ka and Kd for saturable rate equations
-    act_or_inh = ifelse(effect < 0, "inhibitor", "activator"),
-    dissoc_constant = exp(effect)
-  )
-    
-ggplot(pars, aes(x = effect, fill = interaction_type)) +
-  geom_histogram(binwidth = 0.1) 
-  
 
 Deffects <- function(time, states, pars, species_df, time_resolution = 0.1) {
   
@@ -227,11 +227,25 @@ Deffects <- function(time, states, pars, species_df, time_resolution = 0.1) {
   state_derivs <- list(reg_states$deriv)
   
   return (state_derivs)
-  
 }
+
+states <- rep(1, nrow(species_df))
+
+pars <- edges_df %>%
+  dplyr::mutate(
+    # find an effect size and whether a relationship is activating or inhibiting
+    # TO DO - the effect size isn't used anymore
+    effect = reffect(n()),
+    effect = ifelse(interaction_type == "cognate", abs(effect), effect),
+    # transform to Ka and Kd for saturable rate equations
+    act_or_inh = ifelse(effect < 0, "inhibitor", "activator"),
+    dissoc_constant = exp(effect)
+  )
 ```
 
-```{r}
+### Simulate dynamics to find steady state
+
+```{r find_steady_state}
 # since production and degradation rates are not balanced initially
 # we can simulate from initial conditions to find pre-perturbation initial steady state
 MAX_TIME <- 1000
@@ -242,7 +256,8 @@ ode_sim <- ode(
   times = seq(0, MAX_TIME, by = TIME_RESOLUTION),
   func = Deffects,
   parms = pars,
-  species_df = species_df
+  species_df = species_df,
+  time_resolution = TIME_RESOLUTION
   )
 
 simulated_dynamics <- ode_sim %>%
@@ -286,9 +301,17 @@ stopifnot(
   )
 ```
 
-### Now we can take the steady-state and add a genetic perturbation
+# Genetically Perturb the Steady-State
 
-```{r}
+To create each perturbation timecourse we can:
+
+1. initialize abundances using the previously obtained steady-state solution
+2. increase the basal synthesis rate of a single molecular species to represent a perturbation
+3. simulate the system to generate perturbation dynamics
+4. normalize to pre-induction steady state to reflect fold-changes
+
+
+```{r perturbations}
 # now lets separately perturb each species
 
 simulate_perturbation <- function (perturbed_species_id, time_derivatives, species_df) {
@@ -339,10 +362,5 @@ all_perturbation_timecourses %>%
   ggplot(aes(x = time, y = fold_change, group = tc_id)) +
   geom_path() +
   ggtitle("Direct activation / inhibition")
-  
-
-
-
-
 ```
 
