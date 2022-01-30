@@ -131,9 +131,7 @@ experiment_labels <- tibble::tibble(sample = colnames(gasche_matrix)) %>%
 
 ### Formatting for romic
 
-
-
-```{r romic_fomratting}
+```{r romic_formatting}
 # tidy gasche measurements
 tall_gasche <- gasche_2000 %>%
   select(-NAME, -GWEIGHT) %>%
@@ -150,17 +148,35 @@ triple_omic <- create_triple_omic(
 
 # Plotting At the Tips of Your Fingers
 
-When its inefficient to explore a dataset, analyses will either be cursory or take longer than it should. While creating bespoke plots that explore specific aspects of a dataset are difficult to automate, the early stages of data analysis should be.
+When its inefficient to explore a dataset, analyses will either be cursory or take longer than it should. While creating bespoke plots that explore specific aspects of a dataset are difficult to automate, the early stages of exploratory data analysis (EDA) should be. During EDA we hope to identify the major sources of variation in a dataset. Ideally this variation will reflect planned factors in our experimental design, but it is also frequently the case that unexpected sources of variability should be identified so they can be accounted for during modeling.
+
+
+
+
+
+
+To support this early exploration, romic provides several shiny apps components from composable shiny modules 
+
+
 
 
 ## Deploying a shiny app to shinyapps.io
 
-```{r pcs}
+```{r pcs, message=FALSE, warning=FALSE}
 imputed_triple <- triple_omic %>%
   # overwrite existing expression so that we don't thave the
   # raw expression changes which contains lots of missing values
   impute_missing_values(impute_var_name = "expression")
+```
 
+```{r}
+# estimate principal components
+triple_omic_w_pcs <- imputed_triple %>%
+  add_pca_loadings(npcs = 5)
+
+```
+
+```{r}
 app_pcs(imputed_triple)
 ```
 
@@ -179,5 +195,7 @@ heatshock_triple_omic <- imputed_triple %>%
       "Temperature Gradient"
       ))
 
-app_heatmap(imputed_triple)
+plot_heatmap(heatshock_triple_omic)
+
+app_heatmap(heatshock_triple_omic)
 ```
