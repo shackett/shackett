@@ -46,17 +46,38 @@ library(dplyr)
 library(ggplot2)
 library(ggraph) # to plot network elements
 library(deSolve) # for solving the system of differential equations
+
+set.seed(1234)
+
+# parameters of the simulation
+### Defining connectivity
+# # of genes
+N_GENES <- 100
+# relative fraction of metabolites w.r.t. # of genes
+METAB_FRAC <- 0.3
+
+### Defining ODEs
+# average effects size between a cause and effect
+MEAN_EFFECT_SIZE <- 1
+# basal production rate (unaffected by regulation)
+BASAL_PROD <- 0.2
+# first order decay rate
+LOSS_RATE <- 0.4
+
+### Defining ODE simulation
+# how long to simulate to find an initial steady state
+MAX_TIME <- 3000
+# step size for ODE updates
+TIME_RESOLUTION <- 0.1
 ```
 
 ## Create a first-pass Barabasi-Albert network
 
 ```{r setup_molecules, fig.height = 6, fig.width = 6}
-N_GENES <- 100
-METAB_FRAC <- 0.3
 n_metabolites <- N_GENES * METAB_FRAC
 n_species <- N_GENES * 2 + n_metabolites # genes are doubled up because: 1 transcript + 1 protein
 
-net_connections <- igraph::sample_pa(n_species, power = 1, m = 2)
+net_connections <- igraph::sample_pa(n_species, power = 1, m = 3)
 
 # summarize degrees
 edge_counts <- igraph::degree(net_connections) %>%
@@ -92,17 +113,28 @@ species_init <- dplyr::bind_rows(
   dplyr::mutate(species_id = sample(1:n_species))
 
 # edge_plausibility
+# edge_plausibility <- tibble::tribble(~ from_type, ~ to_type, ~ interaction_type, ~ plausibility,
+#                 "transcript", "transcript", NA_character_, 0,
+#                 "transcript", "protein", NA_character_, 0,
+#                 "transcript", "metabolite", NA_character_, 0,
+#                 "protein", "transcript", "TF", 1,
+#                 "protein", "protein", "PPI", 0.5,
+#                 "protein", "metabolite", "enzyme", 1,
+#                 "metabolite", "transcript", "MDI", 0.2,
+#                 "metabolite", "protein", "MPI", 1,
+#                 "metabolite", "metabolite", "interconversion", 1)
+                
 edge_plausibility <- tibble::tribble(~ from_type, ~ to_type, ~ interaction_type, ~ plausibility,
-                "transcript", "transcript", NA_character_, 0,
-                "transcript", "protein", NA_character_, 0,
-                "transcript", "metabolite", NA_character_, 0,
+                "transcript", "transcript", "transcript -> transcript", 1,
+                "transcript", "protein", "transcript -> protein", 1,
+                "transcript", "metabolite", "transcript -> metabolite", 1,
                 "protein", "transcript", "TF", 1,
-                "protein", "protein", "PPI", 0.5,
+                "protein", "protein", "PPI", 1,
                 "protein", "metabolite", "enzyme", 1,
-                "metabolite", "transcript", "MDI", 0.2,
+                "metabolite", "transcript", "MDI", 1,
                 "metabolite", "protein", "MPI", 1,
                 "metabolite", "metabolite", "interconversion", 1)
-                
+
 edges_df <- igraph::as_data_frame(net_connections) %>%
   tibble::as_tibble() %>%
   dplyr::rename(from = to, to = from) %>%
@@ -135,8 +167,8 @@ species_df = species_init %>%
   dplyr::arrange(species_id) %>%
   # add some global properties which can be configured to be feature-specific
   dplyr::mutate(
-    basal_prod = 0.2,
-    loss_rate = 1
+    basal_prod = BASAL_PROD,
+    loss_rate = LOSS_RATE
   )
 
 # network summaries
@@ -153,7 +185,7 @@ if (work_with_top_cluster) {
 }
 
 ggraph(pruned_network, layout = "fr") +
-  geom_edge_link(arrow = arrow(type = "closed", length = unit(0.07, "inches")), color = "gray50", alpha = 0.5) +
+  geom_edge_link(arrow = arrow(type = "closed", length = unit(0.07, "inches")), color = "gray50", alpha = 0.1) +
   geom_node_point(aes(color = species_type)) +
   scale_color_brewer("Species Type", palette = "Set2") +
   theme_void() +
@@ -172,14 +204,14 @@ edges_df %>%
 
 To represent the regulatory network as a series of differential equations, we need an expression relating the rate of change of a query species to the levels of all of its regulators. Such an expression needs to work for 0+ regulators and also produce biologically feasible dynamics (zero molecules shoot to $\infty$ and molecules ideally shouldn't go to zero either). We can represent how a biochemical process is impacted by an arbitrary set of regulators using [convience kinetics](https://link.springer.com/article/10.1186/1742-4682-3-41).
 
-For systems that are just impacted by activation and inhibition (i.e., ignorning substrate <-> product interconversion), such an expression will look like:
+For systems that are just impacted by activation and inhibition (i.e., ignoring substrate <-> product interconversion), such an expression will look like:
 
 $$
 \frac{dS_{k}}{dt} = \prod_{i \in \text{inhibitors}} \frac{k_i}{k_{i} + S_i}\prod_{a \in \text{activators}} \left( 1 + \frac{S_{a}}{k_{a}}\right)
 $$
 Here, $S_{k}$ is the regulated species, $i$s index inhibitors and $a$s index activators. $k_{i}$ and $k_{a}$ are affinity constants reflecting half-max inhibition concentrations, and double activity concentrations respectively. (Note that this an atypical expression for activation but its nice here because it results in values > 1 while the alternative (S/(S + Ka)) results in values < 1.)
 
-Convenience kinetics allows us to define how a process scales with regulators but to improve its behavior we can add basal synthesis and first-order decay terms. Basal synthesis will keep a molecules concentration from dropping to zero. First-order decay (or alternatively washout) decreases concentration proportionally to the current concentration thereby keeping concentrations from shooting to $\infty$ (Note that this is still possible if a strong autoactivating circuit is created but this can be monitored.)
+Convenience kinetics allows us to define how a process scales with regulators but to improve its behavior we can add basal synthesis and first-order decay terms. Basal synthesis will keep a molecules concentration from dropping to zero. First-order decay (or alternatively washout) decreases concentration proportionally to the current concentration thereby keeping concentrations from shooting to $\infty$ (Note that this is still possible if a strong autoactivating circuit is created but this can be monitored or avoided by enforcing max rate.)
 
 Adding basal synthesis and washout terms to convenience kinetics yields the final ODE:
 
@@ -195,7 +227,7 @@ With these ODEs and initial concentrations of all molecular species (here set at
 ```{r}
 reffect <- function (n, mean = 0.5, shape = 10) {
   magnitudes <- rgamma(n, shape = shape, scale = mean / shape)
-  effect <- magnitudes * (rbinom(n, 1, 0.5) - 0.5)*2
+  #effect <- magnitudes * (rbinom(n, 1, 0.5) - 0.5)*2
 }
 
 Deffects <- function(time, states, pars, species_df, time_resolution = 0.1) {
@@ -211,7 +243,8 @@ Deffects <- function(time, states, pars, species_df, time_resolution = 0.1) {
     dplyr::left_join(reg_states, by = c("from" = "species_id")) %>%
     dplyr::mutate(rel_rate = dplyr::case_when(
       act_or_inh == "inhibitor" ~  dissoc_constant / (dissoc_constant + value),
-      act_or_inh == "activator" ~  1 + value / dissoc_constant
+      # force activation scaling to max out at 5X to avoid 
+      act_or_inh == "activator" ~  pmin(1 + value / dissoc_constant, 10),
       )) %>%
     dplyr::group_by(to) %>%
     dplyr::summarize(rate = prod(rel_rate))
@@ -231,15 +264,16 @@ Deffects <- function(time, states, pars, species_df, time_resolution = 0.1) {
 
 states <- rep(1, nrow(species_df))
 
+#reffect(1000, mean = MEAN_EFFECT_SIZE, shape = 1) %>%
+#  hist(breaks = 100)
+
 pars <- edges_df %>%
   dplyr::mutate(
     # find an effect size and whether a relationship is activating or inhibiting
     # TO DO - the effect size isn't used anymore
-    effect = reffect(n()),
-    effect = ifelse(interaction_type == "cognate", abs(effect), effect),
-    # transform to Ka and Kd for saturable rate equations
-    act_or_inh = ifelse(effect < 0, "inhibitor", "activator"),
-    dissoc_constant = exp(effect)
+    dissoc_constant = reffect(n(), mean = MEAN_EFFECT_SIZE, shape = 1),
+    act_or_inh = c("activator", "inhibitor")[rbinom(dplyr::n(), 1, 0.5)+1],
+    act_or_inh = ifelse(interaction_type == "cognate", "activator", act_or_inh),
   )
 ```
 
@@ -248,9 +282,6 @@ pars <- edges_df %>%
 ```{r find_steady_state}
 # since production and degradation rates are not balanced initially
 # we can simulate from initial conditions to find pre-perturbation initial steady state
-MAX_TIME <- 1000
-TIME_RESOLUTION <- 0.5
-
 ode_sim <- ode(
   y = states,
   times = seq(0, MAX_TIME, by = TIME_RESOLUTION),
@@ -270,16 +301,17 @@ simulated_dynamics %>%
   dplyr::semi_join(
     simulated_dynamics %>%
       dplyr::distinct(species_id) %>%
-      dplyr::sample_n(10),
+      dplyr::sample_n(12),
     by = "species_id"
   ) %>%
   ggplot(aes(x = time, y = value)) +
   geom_path() +
-  facet_wrap(~ species_id, scale = "free_y")
+  facet_wrap(~ species_id, scale = "free_y") +
+  ggtitle("Simulation from initial conditions where concenrations are all 1 to find a stable steady-state")
   
 # check for a steady state
 time_derivatives <- simulated_dynamics %>%
-  dplyr::filter(time > max_time - 1) %>%
+  dplyr::filter(time > MAX_TIME - 1) %>%
   dplyr::arrange(time) %>%
   tidyr::nest(vals = -species_id) %>%
   dplyr::mutate(assym_summary = purrr::map(
@@ -311,7 +343,7 @@ To create each perturbation timecourse we can:
 4. normalize to pre-induction steady state to reflect fold-changes
 
 
-```{r perturbations}
+```{r perturbations, fig.height = 10, fig.width = 10}
 # now lets separately perturb each species
 
 simulate_perturbation <- function (perturbed_species_id, time_derivatives, species_df) {
@@ -324,7 +356,7 @@ simulate_perturbation <- function (perturbed_species_id, time_derivatives, speci
     
   perturbation_sim <- ode(
     y = time_derivatives$assym_value,
-    times = seq(0, 100, by = 0.5),
+    times = seq(0, 300, by = 0.5),
     func = Deffects,
     parms = pars,
     species_df = perturbed_species_df
@@ -339,11 +371,10 @@ simulate_perturbation <- function (perturbed_species_id, time_derivatives, speci
     dplyr::ungroup()
 }
 
-ggplot(perturbation_sim, aes(x = time, y = log2(fold_change), group = species_id)) +
-  geom_path()
-
 all_perturbation_timecourses <- time_derivatives %>%
   dplyr::distinct(perturbed_species_id = species_id) %>%
+  # only look at a few experiments for now to tune parameters
+  #dplyr::slice(1:20) %>%
   dplyr::mutate(perturbation_results = purrr::map(
     perturbed_species_id,
     simulate_perturbation, 
@@ -354,13 +385,35 @@ all_perturbation_timecourses <- time_derivatives %>%
 
 all_perturbation_timecourses %>%
   tidyr::unnest(perturbation_results) %>%
-  dplyr::semi_join(
-    pars,
+  dplyr::inner_join(
+    pars %>% dplyr::select(from, to, act_or_inh),
     by = c("perturbed_species_id" = "from", "species_id" = "to")
     ) %>%
   dplyr::mutate(tc_id = glue::glue("{perturbed_species_id}_{species_id}")) %>%
+  ggplot(aes(x = time, y = fold_change, group = tc_id, color = act_or_inh)) +
+  geom_path() +
+  ggtitle("Direct activation / inhibition") +
+  theme_bw()
+
+all_perturbation_timecourses %>%
+  dplyr::slice(1:10) %>%
+  #dplyr::sample_n(10) %>%
+  tidyr::unnest(perturbation_results) %>%
+  dplyr::mutate(tc_id = glue::glue("{perturbed_species_id}_{species_id}")) %>%
   ggplot(aes(x = time, y = fold_change, group = tc_id)) +
   geom_path() +
-  ggtitle("Direct activation / inhibition")
+  facet_wrap(~ perturbed_species_id, scale = "free_y") +
+  ggtitle("Random perturbation experiments") +
+  theme_bw()
 ```
 
+### Export genetic perturbation timecourses
+
+```{r}
+perturbation_dfs <- all_perturbation_timecourses %>%
+  tidyr::unnest(perturbation_results)
+
+readr::write_tsv(perturbation_dfs, "~/Desktop/synthetic_idea_timecourses")
+readr::write_tsv(pars, "~/Desktop/synthetic_idea_parameters")
+
+```
