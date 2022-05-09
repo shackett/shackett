@@ -31,7 +31,7 @@ That said, to manipulate and visualize such data requires integrating metadata w
 
 ## Romic's Tabular Representations
 
-An alternative to manipulating matrices is to work fully with tabular data. This mode of operation is very similar to working with sql, allowing us to maintain a complex, yet organized dataset. Using tabular, tidy, data also allow us to tap into the expansive suite of tools in the tidyverse. Working with features, samples, and measurements tables allow us to separately modify each table, while the three tables can be combined (using primary key - foreign key relationships) if we need to add sample- or feature-level context to measurements. 
+An alternative to manipulating matrices is to work fully with tabular data. This mode of operation is very similar to working with SQL, allowing us to maintain a complex, yet organized dataset. Using tabular "tidy" data also allow us to tap into the expansive suite of tools in the tidyverse. Working with features, samples, and measurements tables allow us to separately modify each table, while the three tables can be combined (using primary key - foreign key relationships) if we need to add sample- or feature-level context to measurements. 
 
 Romic provides two data structures, a triple_omic an tidy_omic class for representing these two scenarios. These formats can be used interchangeable in romic's functions by treating them as a T*omics (tomic) meta-class. Most exported functions from romic, take a tomic object which means they can convert to whatever format makes most sense for a function under the hood and then return a triple_omic or tidy_omic object depending on the input type.
 
@@ -39,31 +39,42 @@ Using a schema, tables can be combined and then broken apart again without const
 
 By taking care of many of the joins and reshaping operations that we may have to do, romic helps to simplify analyses while avoid common data manipulation errors. It directly supports dplyr and some ggplot operations, while data can also be easily pulled out of the romic format (and then added back if desired) based on users' needs.
 
-## Let's format a dataset
+# Exploratory Data Analysis for Genomics
 
-As a quick demo, we can look at published 
+Following a tradition set by Dave Robinson of teaching statistical analysis of genomics data using yeast microarrays [link](http://varianceexplained.org/r/tidy-genomics), I generally teach statistical genomics with the [Brauer et al. 2008](https://www.molbiolcell.org/doi/full/10.1091/mbc.e07-08-0779) dataset and this study formed the basis of romic's [vignette](https://calico.github.io/romic/articles/romic.html) and examples. To expand this theme, here we can look at another old-school yeast expression dataset. 
 
-```{r env_setup, message = FALSE}
+In [Gasch et al. 2000](https://www.molbiolcell.org/doi/full/10.1091/mbc.11.12.4241) the authors explored how yeast expression depends on a range of stressors. Gasch 2K revealed that regardless of the nature of a stressor, yeast tend to respond to the threat with a relatively stereotypical gene expression response termed the "environmental stress response" (the ESR).
+
+David Botstein (the senior author of both of both the Brauer and Gasch papers) refers to this as "shields up and shields down." The idea is that when the Starship Enterprise is cruising along, most power goes to the engine. But, when the Enterprise is under attack (whether from Klingons, Romulans or asteroids) power needs to be redirected to the shields to combat the threat. Cells behave similarly. An interesting corollary of this behavior is that when addressing one stress (such as desiccation), cells will simultaneously become more resistant to other stressors (such as heat shock).
+
+While humans have more complicated stress sensing pathways than yeast, the mammalian equivalent of the ESR, termed the integrated stress response (ISR), still serves an important role in sensing and responding to diverse stresses. Modulating this pathway is being actively explored as an anti-aging/disease therapy by [Calico](https://longevity.technology/calicos-memory-enhancing-drug-reverses-age-related-mental-decline/#:~:text=ISRIB%20(integrated%20stress%20response%20inhibitor,cognitive%20impairments%20in%20Down's%20Syndrome.), [Denali](https://www.alzforum.org/therapeutics/dnl343) and [Altos](https://altoslabs.com/).
+
+## Data Loading
+
+```{r read_data, message=FALSE, warning=FALSE}
+# environment setup
 library(dplyr)
 library(romic)
 
-```
-
-
-
-```{r}
-gasche_2000 <- readr::read_tsv("http://www-genome.stanford.edu/yeast_stress/data/rawdata/complete_dataset.txt")
-gasche_matrix <- gasche_2000 %>%
+gasch_2000 <- readr::read_tsv(
+  file = "http://www.shackett.org/files/gasch2000.txt",
+  col_types = readr::cols() # to accept default column types
+  )
+gasch_matrix <- gasch_2000 %>%
   select(-UID, -NAME, -GWEIGHT) %>%
   as.matrix()
-rownames(gasche_matrix) <- gasche_2000$UID
+rownames(gasch_matrix) <- gasch_2000$UID
 
-print(dim(gasche_matrix))
+print(dim(gasch_matrix))
 ```
 
-### Process metadata
+## Process metadata
 
-#### Genes
+To interpret any of the patterns in this dataset, we'll need some metadata describing both the measured genes and  samples.
+
+### Genes
+
+Genes are frequently summarized using Gene Ontology (GO) terms that capture their sub-cellular localization (CC), molecular function (MF) or biological process (BP). These are typically one-to-many relationships where a given gene will belong to multiple GO terms in each of three ontologies. GO slim ontologies are a curated subset of GO terms which map each gene to a single BP, MF and CC term.
 
 ```{r feature_metadata}
 goslim_mappings <- readr::read_tsv(
@@ -82,17 +93,22 @@ goslim_mappings <- readr::read_tsv(
   ) %>%
   ungroup()
 
-feature_metadata <- gasche_2000 %>%
+feature_metadata <- gasch_2000 %>%
   select(UID) %>%
   left_join(goslim_mappings, by = c("UID" = "ORF"))
+
+knitr::kable(feature_metadata %>% dplyr::slice(1:5))
 ```
 
-#### Samples
+### Samples
 
-```{r}
+Working with a fresh dataset invariably involves some data munging to format data and metadata in a usable format. In the case of the Gasch 2,000 dataset, organizing samples was the most painful part of this process. Gasch 2Ks samples are identified with short irregularly formatted names so it requires a bit of work to organize them. We could address this problem with a manually curated spreadsheet (I generally use tibble::tribble() for small tables and Google Sheets for larger one). Luckily, the samples here are still organized enough that we can programmatically summarize them. Samples are defined in two ways: first, by the type of stressor (e.g., heat, starvation, ...) and second, by the severity of the stressor. Within each stressors, samples are arrangedd in order of increasing stress. With this setup, we can capture each stressor using regulator expressions (since there are inconsistencies in the data, such as "diauxic" and "Diauxic").
+
+
+```{r munging}
 library(stringr)
 
-experiment_labels <- tibble::tibble(sample = colnames(gasche_matrix)) %>%
+experiment_labels <- tibble::tibble(sample = colnames(gasch_matrix)) %>%
   mutate(experiment = case_when(
     str_detect(sample, "hs\\-1") ~ "Heat Shock (A) (duration)",
     str_detect(sample, "hs\\-2") ~ "Heat Shock (B) (duration)",
@@ -126,19 +142,25 @@ experiment_labels <- tibble::tibble(sample = colnames(gasche_matrix)) %>%
     experiment_order = ifelse(is.na(experiment), NA, experiment_order),
     experiment = ifelse(is.na(experiment), "Other", experiment)
   )
+
+experiment_labels %>%
+  dplyr::sample_n(5) %>%
+  knitr::kable()
 ```
 
+## Formatting for romic
 
-### Formatting for romic
+Romic organizes genomic datasets as sets of measurement-, sample-, and feature-level variables. We've essentially created three tables capturing each of these aspects of our dataset already. Romic can bundle these together using a feature primary key shared between the features and measurements table (here, "UID"), and a sample primary key shared between the samples and measurements table (here, "sample").
 
 ```{r romic_formatting}
-# tidy gasche measurements
-tall_gasche <- gasche_2000 %>%
+# tidy gasch measurements
+tall_gasch <- gasch_2000 %>%
   select(-NAME, -GWEIGHT) %>%
-  tidyr::gather("sample", "expression", -UID)
+  tidyr::gather("sample", "expression", -UID) %>%
+  dplyr::filter(!is.na(expression))
   
 triple_omic <- create_triple_omic(
-  measurement_df = tall_gasche,
+  measurement_df = tall_gasch,
   feature_df = feature_metadata,
   sample_df = experiment_labels,
   feature_pk = "UID",
@@ -150,34 +172,31 @@ triple_omic <- create_triple_omic(
 
 When its inefficient to explore a dataset, analyses will either be cursory or take longer than it should. While creating bespoke plots that explore specific aspects of a dataset are difficult to automate, the early stages of exploratory data analysis (EDA) should be. During EDA we hope to identify the major sources of variation in a dataset. Ideally this variation will reflect planned factors in our experimental design, but it is also frequently the case that unexpected sources of variability should be identified so they can be accounted for during modeling.
 
-
-
-
-
-
-To support this early exploration, romic provides several shiny apps components from composable shiny modules 
-
-
-
+To support this early exploration, romic provides several specialized and general purpose interactive Shiny apps built form composable Shiny modules. We'll use two of these apps to demonstrate a general workflow where we'll (1) interactively visualize our dataset in Shiny, (2) share the app with colleagues using shinyapp.io (or Rstudio Connect), and (3) create a static visualization which summarizes our findings.
 
 ## Deploying a shiny app to shinyapps.io
 
 ```{r pcs, message=FALSE, warning=FALSE}
-imputed_triple <- triple_omic %>%
-  # overwrite existing expression so that we don't thave the
-  # raw expression changes which contains lots of missing values
-  impute_missing_values(impute_var_name = "expression")
+triple_omic$measurements %>%
+  dplyr::count(sample) %>%
+  dplyr::arrange(n)
+
+#imputed_triple <- triple_omic %>%
+#  # overwrite existing expression so that we don't thave the
+#  # raw expression changes which contains lots of missing values
+#  impute_missing_values(impute_var_name = "expression")
 ```
 
-```{r}
+```{r add_pcs}
 # estimate principal components
-triple_omic_w_pcs <- imputed_triple %>%
+triple_omic_w_pcs <- triple_omic %>%
   add_pca_loadings(npcs = 5)
 
+romic::plot_bivariate(triple_omic_w_pcs$samples, x_var = "PC1", y_var = "PC2", color = "experiment")
 ```
 
 ```{r}
-app_pcs(imputed_triple)
+app_pcs(triple_omic)
 ```
 
 
