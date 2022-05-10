@@ -1,0 +1,13 @@
+name: romic-PCs
+title: romic-PCs
+username:
+account: seanhacks
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 6265912
+bundleId: 5888236
+url: https://seanhacks.shinyapps.io/romic-PCs/
+when: 1652125109.70963
+lastSyncTime: 1652125109.70965
+asMultiple: FALSE
+asStatic: FALSE
