@@ -1,0 +1,13 @@
+name: romic-pcs
+title: romic-PCs
+username: sean2
+account: sean2
+server: connect-publish.calicolabs.com
+hostUrl: https://connect-publish.calicolabs.com/__api__
+appId: 334
+bundleId: 1649
+url: https://connect-publish.calicolabs.com/content/13302cc1-61b8-4f0e-9d72-6e943f2ff8a4/
+when: 1652120763.52435
+lastSyncTime: 1652120763.52436
+asMultiple: FALSE
+asStatic: FALSE

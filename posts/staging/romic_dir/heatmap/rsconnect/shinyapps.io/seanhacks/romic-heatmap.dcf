@@ -1,0 +1,13 @@
+name: romic-heatmap
+title: romic-heatmap
+username:
+account: seanhacks
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 6266536
+bundleId: 5888212
+url: https://seanhacks.shinyapps.io/romic-heatmap/
+when: 1652124601.78791
+lastSyncTime: 1652124601.78793
+asMultiple: FALSE
+asStatic: FALSE
