@@ -307,7 +307,7 @@ simulated_dynamics %>%
   ggplot(aes(x = time, y = value)) +
   geom_path() +
   facet_wrap(~ species_id, scale = "free_y") +
-  ggtitle("Simulation from initial conditions where concenrations are all 1 to find a stable steady-state")
+  ggtitle("Simulation from initial conditions where concentrations are all 1 to find a stable steady-state")
   
 # check for a steady state
 time_derivatives <- simulated_dynamics %>%

@@ -58,7 +58,7 @@ $$
 
 Including a true (or false) upstream predictor 
 
-```{r conditioning}
+```{r conditioning_ab}
 A_given_B <- lm(A ~ B, dat)
 summary(A_given_B)
 
@@ -125,11 +125,9 @@ ggplot(dat_bivariate_comparisons, aes(x = val_1, y = val_2)) +
   scale_fill_viridis_c(option = "plasma", trans = "sqrt")
 ```
 
-
-
 ### Comparing A -> C vs. A -> B -> C
 
-```{r conditioning}
+```{r conditioning_abc}
 # A predicts C
 C_given_A <- lm(C ~ A, dat)
 summary(C_given_A)

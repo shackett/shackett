@@ -13,16 +13,16 @@ In my last post, I discussed regression and likelihood-based methods for detecti
 
 When working with such data I find that its useful to separate modeling into two phases:
 
-1. First detecting timecourses containing signal using statistical methods (the subject of **post**).
+1. First detecting timecourses containing signal using statistical methods (the subject of [time zero normalization with the Multivariate Gaussian distribution](http://www.shackett.org/2022/05/08/time_zero_normalization)).
 2. Then characterizing the signals of significant timecourses.
 
 Many methods, such as linear regression, will combine these two steps by both detecting a significant effect with estimating its effect. But the interpretability of these methods comes with the cost that we are applying a somewhat rigid view that variation in our responses is described by the contrasts setup in our design matrix. This is one reason why I favor identifying signals without requiring *a priori* assumption of the types of temporal signals we expect. The Multivariate Gaussian test I previously discussed is one such method. Another approach would be to collect replicates and then applying ANOVA to categorically-encoded timepoints. Both of these tests would allow us to detect arbitrary relationships between time and a response. The downside here is that interpreting changes is difficult, because we only know that a timecourse contains signal but not what the signal looks like.
 
 To characterize the patterns in signal-containing timecourse we can use methods which will generate interpretable parameters - thereby allowing us to better characterize similarity and differences among features. We could do this using an array of methods which may not have been suitable for identifying signals in the first place. For example, signal processing, mechanistic models, phenomonological models, stats/ML. In the future, I'll discuss the phenomonological [impulse model](https://github.com/calico/impulse) as a way of summarizing changes based on their magnitude and timing. 
 
-Here, I'll discuss a signal processing step that is helpful before modeling the dynamics of individual responses. While we've already identified signal-containing timecourses, not all observations will necessarily contain signal. In perturbation timecourses early measurements may be collected in order to detect rapid changes, but these changes are likely to be rarer than changes manifesting later in a timecourse. Because of this, we may trust a weak signal later in a timecourse than an earlier one. This intuiton can be formalized by assessing signals at an observation level and then applying soft-thresholding to shrink fold-changes towards zero. This shrinkage will be more aggressive for earlier, more dubious observations. This is possible by using the functional false-discvoery rate (fFDR).
+Here, I'll discuss a signal processing step that is helpful before modeling the dynamics of individual responses. While we've already identified signal-containing timecourses, not all observations will necessarily contain signal. In perturbation timecourses early measurements may be collected in order to detect rapid changes, but these changes are likely to be rarer than changes manifesting later in a timecourse. Because of this, we may trust a weak signal later in a timecourse more than an earlier one. This intuiton can be formalized by assessing signals at an observation level and then applying soft-thresholding to shrink fold-changes towards zero. This shrinkage will be more aggressive for earlier, more dubious observations. This is possible by using the functional false-discvoery rate (fFDR).
 
-First, I'll load some bread-and-butter packages, and then load the perturbation timecourse simulation from **post**.
+First, I'll load some bread-and-butter packages, and then load the perturbation timecourse simulation from [time zero normalization with the Multivariate Gaussian distribution](http://www.shackett.org/2022/05/08/time_zero_normalization).
 
 ```{r env_setup, message=FALSE}
 library(dplyr)
@@ -70,16 +70,29 @@ The true fold changes are always zero at time zero, and many signals don't begin
 
 Before accounting for observations in a timecourse which lack signal, we first need to create a statistic which reflects observation-level signal.
 
-In line with the Multivariate Gaussian test used to identify signal-containing timecourses, we will again assume that we know the standard deviation of individual measurements.
+In line with the Multivariate Gaussian test used to identify signal-containing timecourses, we will again assume that we possess a noise estimate for individual measurements (i.e., an estimate of their standard deviation). Since timecourses' abundances were drawn from an isotropic Gaussian (i.e., $\Sigma = \sigma^{2}I), fold-changes relative to time zero can be treated as a difference of normals (recall that the variance of a difference of normals equals the sum of the variances of each Normal distribution).
 
-Using this information, we can assess how likely an observation is to have come from the underlying noise estimate using a Wald test. Because we are working with fold changes, the variance of fold-changes will be twice the variance of individual observations (the variance of a difference of normals equals the sum of the variances of each normal). With this noise estimate, observed fold change can be compared to the standard deviation estimate to yield a z-score and corresponding p-values. (One limitation of this approach is that it doesn't deal with the bias induced by time-zero normalization as discussed in **post**; If anyone knows of a better hypothesis test, please ping me :).
+$$
+x_{0} \sim \mathcal{N}(\mu_{0}, \sigma^{2})\\
+x_{t} \sim \mathcal{N}(\mu_{t}, \sigma^{2})\\
+x_{t} - x_{0} \sim \mathcal{N}(\mu_{t} - \mu_{0}, 2\sigma^{2})
+$$
+If there is no signal then $\mu_{t} = \mu_{0}$, allowing us to compare fold-change Z-scores to a standard Normal using the Wald test:
+
+$$
+x_t - x_0 \sim \mathcal{N}(0, 2\sigma^{2})\\
+Z = \frac{x_{t}-x_{0}}{\sqrt{2\sigma^2}}\\
+Z \sim \mathcal{N}(0, 1)
+$$
+
+We can now estimate the Wald statistics for observed fold-changes. One limitation of this approach is that it doesn't deal with the bias induced by time-zero normalization as discussed in the MVN post; If anyone knows of a better hypothesis test, please ping me :).
 
 ```{r timecourse_filtering}
-# Using non-centered z-statics generated from log-fold change and gene + timecourse noise estimate the local false discovery rate (lfdr) of individual observations
 observation_signals <- simulated_timecourses %>%
   # hold out measurements that are exactly zero since they are zero by construction
   dplyr::filter(fold_change != 0) %>%
   dplyr::mutate(z_score = fold_change / sqrt(2*measurement_sd^2)) %>%
+  # two-tailed Wald test
   dplyr::mutate(p_norm = 1 - abs(0.5 - pnorm(z_score))*2)
 
 ggplot(observation_signals, aes(x = p_norm, y = ..density..)) +
@@ -228,6 +241,7 @@ ggplot(observation_signals, aes(x = p_norm, y = ..density..)) +
 Visualizing p-value histograms separately by time, we can see that the p-values distributions are closer to $\text{Unif}(0,1)$ at early timepoints and there is a larger fraction of small p-values at late timepoints. This reflects that early timepoints have a high $\pi_{0}$ while later timepoints' $\pi_{0}$ is much lower. To account for the differences in $\pi_{0}$ we could estimate the FDR of timepoints separately but this may run into problems if we have relatively few observations for a timepoint. Instead, we can apply the [functional FDR](https://academic.oup.com/biostatistics/article/22/1/68/5499195) to estimate $\pi_{0}$ as a monotonic function of a power surrogate. For this problem, this will mean that we can estimate $\pi_{0}$ as a function of time.
 
 ```{r observation_level_fdr, fig.height = 6, fig.width = 6}
+# remotes::install_github("StoreyLab/fFDR")
 library(fFDR)
 
 pi_zero_by_t <- estimate_fpi0(p = observation_signals$p_norm,
