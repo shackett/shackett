@@ -604,15 +604,15 @@ false-discovery rate (FDR) as an author of <a href="https://www.pnas.org/content
 hundreds of genomic datasets and I’ve continued to pay this knowledge
 forward with dozens of white-board style descriptions of the FDR for
 colleagues. As an interviewer and paper reviewer I still regularly see
-accomplished individuals and groups where “FDR control” is clearly a
-blind spot. In this post I’ll layout how I whiteboard the FDR problem,
-and then highlight a specialized application of the FDR for “denoising”
+accomplished individuals and groups where “FDR control” is a clear blind
+spot. In this post I’ll layout how I whiteboard the FDR problem, and
+then highlight a specialized application of the FDR for “denoising”
 genomic datasets.</p>
 <div id="multiple-hypothesis-testing" class="section level2">
 <h2>Multiple Hypothesis Testing</h2>
 <p>Statistical tests are designed so that if the null hypothesis is
-true, observed statistics will follow an expected null distribution,
-hence an observed statistic can be compared to the quantiles of the null
+true, observed statistics will follow a defined null distribution, hence
+an observed statistic can be compared to the quantiles of the null
 distribution to calculate the p-value. In quantitative biology we are
 frequently testing hundreds to millions of hypotheses in parallel. The
 p-value for a single test can be interpreted roughly as: p &lt; 0.05,
@@ -620,17 +620,18 @@ yay! [only slightly sarcastically]. But, when we have many tests, some
 will possess small p-values by chance (10,000 tests would have 500 p
 &lt; 0.05 findings by chance). Controlling for multiple hypotheses
 acknowledges this challenge with FDR and FWER providing alternative
-perspectives for winnowing spurious associations.</p>
+perspectives for winnowing spurious associations to a set of
+high-confidence “discoveries”.</p>
 <ul>
-<li><em>FWER</em>: the FWER is the probability of making one or more
+<li>The <strong>FWER</strong> is the probability of making one or more
 false discoveries. FWER is common in genetic association studies
-providing an interpretation that of all loci there is an <span class="math inline">\(\alpha\)</span> chance that there are one or more
-spurious loci. Bonferroni correction controls the FWER by accepting
-tests whose p-values are less than <span class="math inline">\(\frac{\alpha}{N}\)</span> where <span class="math inline">\(\alpha\)</span> is the type I error rate and <span class="math inline">\(N\)</span> is the number of hypotheses.</li>
-<li><em>FDR</em>: the FDR involves selecting a set of observation (the
-positive tests) which constrains the expected number of false positives
-(<span class="math inline">\(\mathop{{}\mathbb{E}}\)</span>FP) selected
-relative to true positives to a desired proportion: i.e. <span class="math inline">\(\mathop{{}\mathbb{E}}\left[\frac{\text{FP}}{\text{FP}
+providing an interpretation that of all loci there is an <span class="math inline">\(\alpha\)</span> chance that are one or more are
+spurious. Bonferroni correction controls the FWER by accepting tests
+whose p-values are less than <span class="math inline">\(\frac{\alpha}{N}\)</span> where <span class="math inline">\(\alpha\)</span> is the type I error rate and <span class="math inline">\(N\)</span> is the number of hypotheses.</li>
+<li>The <strong>FDR</strong> involves selecting a set of observation
+(the positive tests) which constrains the expected number of false
+positives (<span class="math inline">\(\mathop{{}\mathbb{E}}\)</span>FP)
+selected relative to true positives to a desired proportion: i.e. <span class="math inline">\(\mathop{{}\mathbb{E}}\left[\frac{\text{FP}}{\text{FP}
 + \text{TP}}\right] \leq \alpha\)</span>. The FDR is less conservative
 than the FWER and is useful whenever we want to interpret the trends in
 a dataset even if individual findings may be spurious. This thought
@@ -638,13 +639,30 @@ process fits nicely into genomics where differential expression analysis
 is frequently coupled to reductionist approaches like Gene Set
 Enrichment Analysis (GSEA).</li>
 </ul>
-<p>The FDR appeals to me because the FWER will only recall a small,
-conservative number of real biological associations and I don’t think
-that measuring more things (e.g., going from 200 genes to 10K) should
-affect your recall. There are multiple ways to control the FDR and I
-think the <a href="https://www.pnas.org/content/100/16/9440">Storey
-&amp; Tibshirani</a> “q-value” framework is particularly appealing
-because of its Bayesian elegance and statistical power.</p>
+<p>The FWER and FDR control different properties so its not entirely
+fair to compare them yet I often see people controlling the FWER and
+then interpreting results as if they were controlling the FDR (and vice
+versa) so its important to note their practical differences. Whenever we
+have multiple hypotheses, the FWER will be more conservative
+(underestimating changes) than the FDR and this difference in power
+between the FDR and FWER widens with the number of hypotheses being
+tested. If we carried out more tests the p-value threshold for detecting
+discoveries would drop (perhaps resulting a drop in discoveries with
+more features!) while this threshold should be constant if we are
+controlling the FDR resulting in a proportional increase in the number
+of significant hits as we detect more features. This distinction is
+frequently misunderstood - folks will say things like “I’m not sure
+these changes would survive the FDR.” The shadow of the FWER results in
+a perception that collecting more information will prevent us from
+detecting “high confidence” hits. In reality, a well-selected FDR
+procedure can help to squeeze the most power out of a dataset.</p>
+<p>There are multiple ways to control the FDR and I think the <a href="https://www.pnas.org/content/100/16/9440">Storey &amp;
+Tibshirani</a> “q-value” framework is particularly appealing because of
+its Bayesian elegance and statistical power. When the assumptions
+underlying the q-value approach breakdown (basically when my p-values
+don’t look nice like the ones below), I fall back to the
+Benjamini-Hochberg approach for controlling FDR. BH preceded Storey’s
+q-value but is a special case of it (where _{0} set at one).</p>
 </div>
 <div id="controlling-the-false-discovery-rate-fdr-with-q-values" class="section level1">
 <h1>Controlling the False Discovery Rate (FDR) with Q-Values</h1>
@@ -695,18 +713,13 @@ gridExtra::grid.arrange(observation_grob, pvalues_grob, ncol = 2)</code></pre>
 values cannot be clearly separated (that would be too easy!) rather
 noise works against some positives, and some negative observations take
 on extreme values by chance. This is paralleled by the p-values of
-positive and negative observations. Positive p-values tend to be small,
-but may also be large; while negative p-values being uniformly
-distributed from 0 to 1 are as likely to be small as large. The fact
-that if we have many negative tests we will inevitably have some small
-p-values is why we should care about correcting for multiple hypotheses
-and controlling the FDR.</p>
+positive and negative observations. True positive p-values tend to be
+small, but may also be large; while true negative p-values are uniformly
+distributed from 0 to 1 and are as likely to be small as large.</p>
 <p>To control the FDR at a level <span class="math inline">\(\alpha\)</span>, the Storey procedure first
 calculates <span class="math inline">\(\hat{\pi}_{0}\)</span>, the
 estimated fraction of null hypothesis (i.e., the 0.5 value from our
-simulation). (Note that another popular FDR control procedure,
-Benjamini-Hochberg is equivalent to the q-value procedure with _{0} set
-at one.) This is done by looking at large p-values (near 1). Because
+simulation). This is done by looking at large p-values (near 1). Because
 large p-values will rarely be signal-containing positives there will be
 fewer large p-values than would be expected from the number of tests.
 For example, there are 5106 p-values &gt; 0.9 in our example, which is
@@ -737,7 +750,7 @@ true value of 0.5 It also contains a vector of q-values, lFDR, and other
 goodies.</p>
 <p>The q-values are the quantity that we’re usually interested in; if we
 take all of the q-values less than a target cutoff of say 0.05, then
-that should give us a set of “discoveries” with less than a 5% FDR.</p>
+that should give us a set of “discoveries” realizing a 5% FDR.</p>
 <pre class="r"><code>simple_qvalues &lt;- simple_pvalue_mixture %&gt;%
   mutate(q = qvalue_estimates$qvalues)
 
@@ -813,15 +826,17 @@ But, in some cases we care about how likely an individual observation is
 to be a false positive. In this case we can look at the local density of
 p-values near an observation of interest to estimate a local version of
 the FDR, the local FDR (lFDR).</p>
-<p>We took advantage of this property during one of my collaboration
-with Google Brain aimed to improve the accuracy of peptides matches to
+<p>We took advantage of this property during my collaboration with
+Google Brain aimed to improve the accuracy of peptide matches to
 proteomics’ spectra using labels from traditional informatics (<a href="https://arxiv.org/abs/1808.06576">arXiv</a>). In this study we
-weighted peptide labels with their lFDR in a cross-entropy loss.</p>
+weighted peptides’ labels with their lFDR using a cross-entropy loss to
+more strongly penalize failed prediction with high-confidence
+labels.</p>
 </div>
 <div id="lfdr-based-shrinkage" class="section level1">
 <h1>lFDR-based shrinkage</h1>
 <p>Because the lFDR reflects the relative odds that an observation is
-null it is a useful measure for shrinkage / thresholding aiming to
+null it is a useful measure for shrinkage or thresholding aiming to
 remove noise and better approximate true value. To do this we can weight
 an observation by 1-lFDR. One interpretation of this is that we are
 using the lFDR to hedge our bets between the positive and negative
@@ -858,7 +873,7 @@ mean reflecting the removal of noise.</p>
   inner_join(true_values, by = &quot;truth&quot;) %&gt;%
   mutate(resid = value - mu) %&gt;%
   group_by(processing) %&gt;%
-  summarize(RSS = sum(resid^2)) %&gt;%
+  summarize(RMSE = sqrt(mean(resid^2))) %&gt;%
   knitr::kable() %&gt;%
   kableExtra::kable_styling(full_width = FALSE)</code></pre>
 <table class="table" style="width: auto !important; margin-left: auto; margin-right: auto;">
@@ -868,7 +883,7 @@ mean reflecting the removal of noise.</p>
 processing
 </th>
 <th style="text-align:right;">
-RSS
+RMSE
 </th>
 </tr>
 </thead>
@@ -878,7 +893,7 @@ RSS
 original value
 </td>
 <td style="text-align:right;">
-99891.58
+0.9994577
 </td>
 </tr>
 <tr>
@@ -886,7 +901,7 @@ original value
 shrinkage estimate
 </td>
 <td style="text-align:right;">
-65660.90
+0.8103141
 </td>
 </tr>
 </tbody>
