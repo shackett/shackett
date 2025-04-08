@@ -1,5 +1,6 @@
-- My professional projects at Calico are primarily in private repos but some have been open sourced:
-    - [OpenCLaM](https://github.com/calico/open_clam) - A robust ecosystem for working with mass spectrometry data combining a configurable Dockerized pipeline and R packages supporting the pipeline and downstream analysis.
+- During my time at Calico, I developed:
+    - [Open-CPR](https://github.com/calico/opencpr) - A framework for aggregating different sources of molecular mechanisms into genome-scale graphs of cellular physiology.
+    - [OpenCLaM](https://github.com/calico/open_clam) - A robust ecosystem for working with mass spectrometry data, codeveloped with Phil Seitzer, which combines a configurable Dockerized pipeline and R packages supporting the pipeline and downstream analysis.
     - Approaches using genome-scale systems biology to understand regulation. See [Induction Dynamics Expression Atlas](https://idea.research.calicolabs.com/) and [Impulse](https://github.com/calico/impulse).
     - [romic](https://github.com/calico/romic) - Data structures and strategies for generalizing common analysis steps in genomics.
 
