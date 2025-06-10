@@ -12,12 +12,19 @@ knitr::opts_chunk$set(echo = TRUE)
 ```{r env, message = FALSE}
 library(dplyr)
 library(ggplot2)
+library(ggdag)
 ```
 
 
 ## Two factors: {A, B}
 
 ### Truth A -> B
+
+```{r}
+dagify(B ~ A) %>%
+  ggdag() +
+  theme_dag()
+```
 
 ```{r simulate_a_b}
 N <- 10000
@@ -27,7 +34,8 @@ dat <- tibble(A = rnorm(N)) %>%
 
 ggplot(dat, aes(x = A, y = B)) +
   geom_hex(bins = 60) +
-  scale_fill_viridis_c(option = "plasma", trans = "sqrt")
+  scale_fill_viridis_c(option = "plasma", trans = "sqrt") +
+  theme_bw()
 ```
 
 $$
@@ -54,6 +62,7 @@ stacked_A_B %>%
 $$
 \sigma^{2} = \text{bias}^{2} + \sigma^{2}_{\epsilon}
 $$
+
 ### Comparing A -> B vs. B -> A
 
 Including a true (or false) upstream predictor 
@@ -100,7 +109,15 @@ This is why mediation frequently focuses on situations where at most one directi
 
 ## Three factors: {A, B, C}
 
-### Truth A -> B
+```{r}
+dagify(
+  C ~ B,
+  B ~ A) %>%
+  ggdag() +
+  theme_dag()
+```
+
+### Truth A -> B -> C
 
 ```{r simulate_a_b_c}
 N <- 10000
@@ -122,7 +139,8 @@ dat_bivariate_comparisons <- tibble(
 ggplot(dat_bivariate_comparisons, aes(x = val_1, y = val_2)) +
   geom_hex(bins = 60) +
   facet_grid(key_2 ~  key_1) +
-  scale_fill_viridis_c(option = "plasma", trans = "sqrt")
+  scale_fill_viridis_c(option = "plasma", trans = "sqrt") +
+  theme_bw()
 ```
 
 ### Comparing A -> C vs. A -> B -> C
@@ -136,11 +154,7 @@ summary(C_given_A)
 C_given_BA <- lm(C ~ B + A, dat)
 summary(C_given_BA)
 
-# this is also true if we we considered A being impacted by A
+# this is also true if we we considered A being impacted by B
 summary(lm(A ~ B + C, dat))
 summary(lm(A ~ C, dat))
-
-# but, if we can indicate that A -> B, and B -/-> A
-
-
 ```
