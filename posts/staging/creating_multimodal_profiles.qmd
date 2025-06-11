@@ -1,0 +1,72 @@
+---
+title: "Creating Multimodal Disease Profiles"
+author: "Shackett"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+format:
+  html:
+    embed-resources: true
+    code-fold: true
+    code-summary: "Show the code"
+    toc: true
+    theme: minty
+    highlight: tango
+    code-block-bg: true
+    code-block-border-left: "#5BB867"
+---
+
+This is part one of a two part post highlighting *Napistu*; a new framework for building genome-scale networks of molecular biology and biochemistry and interrogating them with high-dimensional data.
+
+In this post, we will set the stage by discussing a common real-world use case - identifying the common regulators and characteristic pathways of a set of genes. Gene set enrichment analysis (GSEA) is the bioinformatics warhorse for tackling this problem, but its limited by up-front definitions of gene sets, and is challenged when we are working with multiple data types. By mapping transcripts, proteins, metabolites, drugs, etc. onto entities in a graph we can transcend these limitations. But, in doing so, we'll strive to maintain the ease-of-use of GSEA.
+
+
+
+The goal of this is to generate a set of molecular profiles, each of which contains a summary statistic for a large number of features from one or more data modalities.
+
+In the following post, we will discuss how we can connect each profile to a network graph and apply network propagation to let information flow from the symptoms of a disease to its upstream regulatory causes.
+
+
+In this series, I'll also reflect on the mechanics of performing these types of analyses in the era of genAI and AI-assisted coding. Many of us are trying to find the sweet spot between unaugmented software development and vibe coding. I'll call out the AI tools and workflows that I used and what they did well versus where they failed spectacularly.
+
+
+## What is MMA and the Forny 2023 dataset?
+
+
+
+
+Open Qs?
+
+
+## Strategy for creating profiles
+
+1. EDA (explore the major drivers of variation)
+   a. what are the relevant measures of disease severity?
+   b. are there batch effects?
+   c. what statistical models should we use to identify features
+2. Supervised analysis
+   a. regression
+3. Unsupervised analysis
+   a. multivariate factor analysis
+
+
+This seems like a pretty good playbook for capturing the disease’s biology. The problem though is that I normally perform EDA and statistical analysis in R. But, I wanted to stick with Python for this work because Napistu is a Python framework and I wanted to build up support for funneling these types of datasets' findings into it.
+
+To address this, I wanted to develop and utilize a codebase which satisfied several constraints
+- performs the key analyses supporting each problem
+- scientifically accurate
+- developable in little time
+
+This seems to be a classic case of the eternal software problem, you can't have all of {fast, good, and cheap}, pick two. Can genAI help us to achieve all three? It's very good at fast & cheap so we can use them to create good analyses.
+
+- Brittle - tries to get too fancy by building advanced features; many arguments; no testing
+- Unmaintainable - writing mountains of code; little focus on refactoring; limited docstrings; no type hints
+Wrong - brittle and unmaintainable code is not the end of the world in a 1-off analysis but genAI can make implementation decisions which are scientifically inaccurate. A couple that I ran into during this analysis are:
+Parsing the dependent variables out a regression formula (e.g., y ~ a + b) and turning it into separate tests (y ~ a & y ~ b).
+- Treating p-values and q-values interchangeably where if q-values are missing it would filter on p-values < fdr_cutoff to identify discoveries.
+
+The scary part is that wrong details can be hidden under layers of brittle, unmaintainable code.
+
+
+
+
+
+
