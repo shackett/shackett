@@ -1,4 +1,4 @@
-Currently I am developing I developing [Napistu](https://github.com/napistu/napistu) - a Python framework for creating geneome-scale graphs of molecular biology and biochemistry and integrating them with high-dimensional data.
+Currently I am developing [Napistu](https://github.com/napistu/napistu) - a Python framework for creating geneome-scale graphs of molecular biology and biochemistry and integrating them with high-dimensional data.
 
 - During my time at Calico, I developed:
     - [Open-CPR](https://github.com/calico/opencpr) - A framework for aggregating different sources of molecular mechanisms into genome-scale graphs of cellular physiology.
