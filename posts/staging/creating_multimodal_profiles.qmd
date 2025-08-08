@@ -1,7 +1,6 @@
 ---
 title: "Creating Multimodal Disease Profiles"
 author: "Shackett"
-date: "`r format(Sys.time(), '%d %B, %Y')`"
 format:
   html:
     embed-resources: true
@@ -12,61 +11,774 @@ format:
     highlight: tango
     code-block-bg: true
     code-block-border-left: "#5BB867"
+jupyter: forny-2023
+engine: jupyter
 ---
 
-This is part one of a two part post highlighting *Napistu*; a new framework for building genome-scale networks of molecular biology and biochemistry and interrogating them with high-dimensional data.
+This is part one of a two-part post highlighting *Napistu*; a new framework for building genome-scale networks of molecular biology and biochemistry and interrogating them with high-dimensional data.
 
-In this post, we will set the stage by discussing a common real-world use case - identifying the common regulators and characteristic pathways of a set of genes. Gene set enrichment analysis (GSEA) is the bioinformatics warhorse for tackling this problem, but its limited by up-front definitions of gene sets, and is challenged when we are working with multiple data types. By mapping transcripts, proteins, metabolites, drugs, etc. onto entities in a graph we can transcend these limitations. But, in doing so, we'll strive to maintain the ease-of-use of GSEA.
+In this post, we will set the stage by discussing a common real-world use case - identifying the common regulators and characteristic pathways of a set of genes. Gene set enrichment analysis (GSEA) is the bioinformatics warhorse for tackling this problem, but it's limited by up-front definitions of gene sets, and is challenged when we are working with multiple data types. By mapping transcripts, proteins, metabolites, drugs, etc. onto the vertices of a graph we can transcend these limitations. But, in doing so, we'll strive to maintain the ease-of-use of GSEA.
 
+In this post, we will establish the foundation for network-based disease analysis by tackling a fundamental challenge: how do we extract meaningful biological signals from complex multi-modal datasets? The **analytical** approach used - exploratory data analysis, differential expression analysis, and factor analysis - provides a systematic way to identify patterns in the data and connect them to disease status. This step is critical because network analyses are only as good as the molecular profiles we feed into them. Our goal is to create clean, quantitative disease signatures that can serve as reliable inputs for the network propagation methods we'll explore in part two.
 
-
-The goal of this is to generate a set of molecular profiles, each of which contains a summary statistic for a large number of features from one or more data modalities.
+Here, we will focus on generating a set of molecular profiles, each of which contains a summary statistic for a large number of features from one or more data modalities.
 
 In the following post, we will discuss how we can connect each profile to a network graph and apply network propagation to let information flow from the symptoms of a disease to its upstream regulatory causes.
 
-
 In this series, I'll also reflect on the mechanics of performing these types of analyses in the era of genAI and AI-assisted coding. Many of us are trying to find the sweet spot between unaugmented software development and vibe coding. I'll call out the AI tools and workflows that I used and what they did well versus where they failed spectacularly.
+  
+## What is MMA?
+
+Methylmalonic acidemia (MMA), not to be confused with mixed-martial arts (which curiously enough I used to also blog about - [Fight Prior](https://www.fightprior.com/)), is an inborn error of metabolism characterized by the buildup of methylmalonic acid.
+
+{% include bio-section.html content="
+MMA is genetically heterogeneous, caused by defects in approximately 20 genes involved in propionate metabolism. Classical isolated MMA is primarily caused by autosomal recessive mutations in the enzyme Methylmalonyl-CoA mutase (MMUT), which converts methylmalonyl-CoA to succinyl-CoA as part of propionate catabolism. This pathway processes metabolites from odd-chain fatty acids, cholesterol, and certain amino acids. When disrupted, methylmalonic acid accumulates, leading to metabolic acidosis and multi-organ dysfunction including neurological abnormalities, kidney failure, and growth problems.
+" %}
+
+**What makes MMA challenging to study:** Despite being caused by defects in a well-characterized metabolic pathway, MMA presents significant clinical and research challenges. Patients show enormous variability in disease severity, treatment responsiveness, and clinical outcomes - even when they share the same genetic mutations. Traditional biochemical assays provide important diagnostic information but offer an incomplete picture of disease pathophysiology.
+
+This variability suggests that understanding MMA requires moving beyond simple "broken enzyme" models toward systems-level approaches that can capture the complex downstream effects of metabolic disruption.
+
+### The Forny Multi-Omics Approach
+
+To address the complexity of MMA, [Forny et al., 2023](https://www.nature.com/articles/s42255-022-00720-8) conducted one of the largest multi-omic studies of a rare metabolic disease. They profiled 210 patient-derived fibroblasts and 20 controls using transcriptomics and proteomics, aiming to answer fundamental questions about disease mechanisms and therapeutic targets.
+
+**Key findings from the Forny study:**
+- **Diagnostic power**: Achieved molecular diagnosis in 177 out of 210 cases (84%), but 33 patients remain without clear genetic explanations
+- **Genetic diversity**: While 148 patients had MMUT mutations, others had defects in ACSF3, TCN2, SUCLA2, and other genes, revealing broader genetic heterogeneity than previously recognized
+- **Metabolic rewiring**: Discovered unexpected disruption of TCA cycle anaplerosis (metabolic replenishment pathways), particularly involving glutamine metabolism
+- **Protein interactions**: Identified physical interactions between MMUT and other metabolic enzymes, suggesting coordinated regulation
+- **Therapeutic targets**: Demonstrated that dimethyl-oxoglutarate treatment can restore metabolic function in cellular models
+
+{% include bio-section.html content="
+The study revealed that MMA involves more than just a 'broken enzyme.' Instead, MMUT deficiency triggers systematic rewiring of cellular metabolism, particularly affecting how cells replenish TCA cycle intermediates. This anaplerotic rewiring involves increased reliance on glutamine metabolism and appears to involve direct protein-protein interactions between MMUT and glutamine-processing enzymes. This finding was unexpected and suggests that MMUT functions as part of a larger metabolic regulatory complex.
+" %}
+
+**Open Questions and Our Approach**
+
+While the Forny study made significant advances, several questions remain about how to translate these molecular insights into clinical applications:
+
+- How can we prioritize patients based on molecular signatures for personalized treatment?
+- What are the upstream regulatory networks driving the observed metabolic rewiring?
+- Can we identify coordinated programs across transcriptomics and proteomics that traditional single-modality analyses miss?
+
+This is where network-based approaches become powerful - by connecting molecular profiles to biological networks, we can trace disease signals from downstream symptoms to upstream regulatory causes.
+
+## Strategy for Creating Disease Profiles
+
+To extract gene-level summaries of disease biology, we need to first address data quality issues and understand the major sources of variation in our datasets. Our analysis strategy follows a systematic approach:
+
+### 1. Exploratory Data Analysis (EDA)
+Before diving into hypothesis testing, we need to understand what's actually driving variation in our data:
+
+- **Disease severity measures**: What are the relevant quantitative biomarkers?
+- **Batch effects**: Are there technical sources of variation confounding biological signals?
+- **Statistical models**: What covariates should we include in our regression models?
+
+### 2. Supervised Analysis
+We'll use regression-based approaches to identify individual features (genes/proteins) associated with disease phenotypes:
+
+- **Feature-wise regression**: Test each gene/protein for association with disease measures
+- **Covariate adjustment**: Control for identified batch effects using spline smoothing
+- **Effect size estimation**: Quantify the magnitude of disease associations
+
+### 3. Unsupervised Analysis
+We'll apply factor analysis to discover coordinated expression programs:
+
+- **Multi-omic Factor Analysis (MOFA)**: Find latent factors that capture coordinated variation across transcriptomics and proteomics
+- **Factor-phenotype associations**: Identify which factors correlate with disease severity
+- **Cross-modal integration**: Understand how transcriptional and proteomic changes coordinate
+
+This seems like a pretty good playbook for capturing disease biology. However, I normally perform EDA and statistical analysis in R, but I wanted to stick with Python for this work because Napistu is a Python framework and I wanted to build up support for funneling these types of datasets' findings into it.
+
+### The AI-Assisted Development Challenge
+
+To address this transition, I wanted to develop and utilize a codebase which satisfied several constraints:
+- Performs the key analyses supporting each problem
+- Scientifically accurate
+- Developable in little time
+
+This seems to be a classic case of the eternal software problem: you can't have all of {fast, good, and cheap}, pick two. Can genAI help us achieve all three? It's very good at fast & cheap, so can we use it to create good analyses?
+
+**Where AI Development Fails**
+
+Through this project, I encountered several failure modes of AI-assisted coding:
+
+- **Brittle**: Tries to get too fancy by building advanced features with many arguments but no testing
+- **Unmaintainable**: Writing mountains of code with little focus on refactoring, limited docstrings, and no type hints
+- **Wrong**: Most concerning, AI can make implementation decisions that are scientifically inaccurate
+
+A couple of examples I ran into during this analysis:
+- Parsing dependent variables out of a regression formula (e.g., `y ~ a + b`) and turning it into separate tests (`y ~ a` & `y ~ b`)
+- Treating p-values and q-values interchangeably where if q-values are missing, it would filter on `p-values < fdr_cutoff` to identify discoveries
+
+The scary part is that wrong details can be hidden under layers of brittle, unmaintainable code. This led me to develop the [`shackett-utils`](https://github.com/shackett/shackett-utils) package with proper testing and documentation.
+
+## Creating Molecular Profiles of MMA
+
+### Environment Setup
+
+If you'd like to reproduce this analysis, follow these steps:
+
+1. Install [uv](https://docs.astral.sh/uv/#highlights) (or just `pip` install)
+2. Setup a Python environment:
+
+```{zsh}
+#| label: python_envsetup_directions
+#| eval: false
+
+uv venv --python 3.11
+source .venv/bin/activate
+
+# Core dependencies
+uv pip install napistu'[scverse]'
+# Personal utilities package with genomics analysis functions
+uv pip install "git+https://github.com/shackett/shackett-utils.git[all]" 
+# Additional dependencies
+uv pip install openpyxl scikit-learn mofapy2 ipykernel
+python -m ipykernel install --user --name=forny-2023
+```
+
+3. Download the `Source Data Fig.1` from [Forny et al., 2023](https://www.nature.com/articles/s42255-022-00720-8#Sec39).
+
+4. Modify the following code block so `SUPPLEMENTAL_DATA_DIR` points to the directory containing the download from step 3 (`42255_2022_720_MOESM3_ESM.xlsx`).
+
+5. Set `CACHE_DIR` in the following code block to a location where intermediate results can be saved.
+
+```{python}
+#| label: env_setup
+#| echo: false
+
+import os
+import textwrap
+
+import anndata as ad
+import matplotlib.pyplot as plt
+import mudata as md
+import muon
+import numpy as np
+import pandas as pd
+import scanpy as sc
+import seaborn as sns
+from sklearn.impute import KNNImputer
+
+# this analysis is largely upstream of Napistu but we can use some of its utils
+from napistu import utils
+
+# import local modules
+from shackett_utils.applications import forny_imputation
+import shackett_utils.genomics.adata_processing as processing
+from shackett_utils.genomics import adata_regression
+from shackett_utils.genomics import mdata_eda
+from shackett_utils.genomics import mdata_factor_analysis
+from shackett_utils.statistics import stats_viz
+from shackett_utils.statistics import transform
+
+# File paths and data organization
+# All input data should be placed in the SUPPLEMENTAL_DATA_DIR
+# Cached results and models will be stored in CACHE_DIR
+
+# paths
+PROJECT_DIR = os.path.expanduser("~/napistu_mma_posts")
+SUPPLEMENTAL_DATA_DIR = os.path.join(PROJECT_DIR, "input")
+CACHE_DIR = os.path.join(PROJECT_DIR, "cache")
+
+# Define the path to save hyperparameter scan results
+MOFA_PARAM_SCAN_MODELS_PATH = os.path.join(CACHE_DIR, "mofa_param_scan_h5mu")
+# Final results 
+OPTIMAL_MODEL_H5MU_PATH = os.path.join(CACHE_DIR, "mofa_optimal_model.h5mu")
+
+# formats
+SUPPLEMENTAL_DATA_FILES = {
+    "transcriptomics" : {
+        "file" : "42255_2022_720_MOESM3_ESM.xlsx",
+        "sheet" : "Source Data transcriptomics"
+    },
+    "proteomics" : {
+        "file" : "42255_2022_720_MOESM3_ESM.xlsx",
+        "sheet" : "Source Data proteomics"
+    },
+    "phenotypes" : {
+        "file" : "42255_2022_720_MOESM4_ESM.xlsx",
+        "sheet" : 0
+    }
+}
+
+# other globals
+# path to proteomics filenames for extracting run order
+PROTEOMICS_FILE_NAMES_URL = "https://github.com/user-attachments/files/20616164/202502_PHRT-5_MMA_Sample-annotation.txt"
+# filter genes with fewer than this # of counts summed over samples
+READ_CUTOFF = int(400)
+# filter phenotypes with more than this # of missing values
+MAX_MISSING_PHENOTYPE = int(180)
+# measure to use for analysis
+ANALYSIS_LAYER = "log2_centered"
+# cutoff for qvalues (FDR-adjusted p-values)
+FDR_CUTOFF = 0.1
+# Overwrite the results if they already exist   
+OVERWRITE = False
+# Define the optimal number of factors
+OPTIMAL_FACTOR = int(30)
+# Define the range of factors to test for MOFA
+FACTOR_RANGE = range(4, 51, 2)
+# naming scheme for feature- and factor-level regression results
+FEATURE_REGRESSION_STR = "feature_regression_{}"
+FACTOR_REGRESSION_STR = "mofa_regression_{}"
+
+# Statistical model specifications
+# Used for both feature- and factor-level regression
+# We use different covariates for each data modality based on identified batch effects:
+# - Transcriptomics: only date_freezing affects expression
+# - Proteomics: both proteomics_runorder and date_freezing are significant
+# The 's()' notation indicates spline smoothing for non-linear relationships
+REGRESSION_FORMULAS = {
+    "transcriptomics" : {
+        "case" : "~ case + s(date_freezing)",
+        "OHCblPlus" : "~ OHCblPlus + s(date_freezing)",
+        "MMA_urine" : "~ MMA_urine + s(date_freezing)",
+        "responsive_to_acute_treatment" : "~ responsive_to_acute_treatment + s(date_freezing)",
+        "proteomics_runorder" : "~ s(proteomics_runorder) + s(date_freezing)", # we don't expect this to be significant
+        "date_freezing" : "~ s(proteomics_runorder) + s(date_freezing)"
+    },
+    "proteomics" : {
+        "case" : "~ case + s(proteomics_runorder) + s(date_freezing)",
+        "OHCblPlus" : "~ OHCblPlus + s(proteomics_runorder) + s(date_freezing)",
+        "MMA_urine" : "~ MMA_urine + s(proteomics_runorder) + s(date_freezing)",
+        "responsive_to_acute_treatment" : "~ responsive_to_acute_treatment + s(proteomics_runorder) + s(date_freezing)",
+        "proteomics_runorder" : "~ s(proteomics_runorder) + s(date_freezing)",
+        "date_freezing" : "~ s(proteomics_runorder) + s(date_freezing)"
+    }
+}
+
+# load data
+supplemental_data_path = {
+    x : {
+        "path" : os.path.join(SUPPLEMENTAL_DATA_DIR, y["file"]),
+        "sheet" : y["sheet"]
+    }
+        for x, y in SUPPLEMENTAL_DATA_FILES.items()
+}
+
+for x in supplemental_data_path.values():
+  print(x)
+
+assert all([os.path.isfile(x["path"]) for x in supplemental_data_path.values()])
+
+supplemental_data = {
+    x : pd.read_excel(y["path"], sheet_name = y["sheet"]) for x, y in supplemental_data_path.items()
+}
+
+# formatting
+supplemental_data["transcriptomics"] = (
+  supplemental_data["transcriptomics"]
+  .rename({"Unnamed: 0" : "ensembl_gene"}, axis = 1)
+  .set_index("ensembl_gene")
+)
+supplemental_data["proteomics"] = (
+  supplemental_data["proteomics"]
+  .rename({"PG.ProteinAccessions" : "uniprot"}, axis = 1)
+  .set_index("uniprot")
+)
+supplemental_data["phenotypes"] = (
+  supplemental_data["phenotypes"]
+  .rename({"Unnamed: 0" : "patient_id"}, axis = 1)
+  .set_index("patient_id")
+)
+```
+
+### Understanding the Data Structure
+
+The Forny et al. dataset contains three key components:
+
+- **Transcriptomics**: RNA-seq data from patient-derived fibroblasts (210 MMA patients + 20 controls)
+- **Proteomics**: Mass spectrometry data from the same cell lines
+- **Phenotypes**: Clinical measurements including enzymatic assays and biochemical markers
+
+Key challenges in this dataset include class imbalance (only 20 controls vs 210 cases), missing phenotype data for many clinical measurements, batch effects from sample processing dates and instrument runs, and disease heterogeneity with varying genetic subtypes and severity levels.
+
+### Formatting Phenotypes and Technical Covariates
+
+Clinical data presents unique challenges that require careful preprocessing. We need to address several issues before we can use these measurements in our statistical models.
+
+**Why Transform Clinical Variables?**
+
+Clinical data is often right-skewed and contains missing values since only a subset of tests will be ordered for individual patients. Since we're interested in quantitative biomarkers, it's helpful to have these measurements for all patients to improve statistical power. We can apply imputation, but it's beneficial to first transform attributes so they more closely follow a multivariate Gaussian distribution. This also helps with regression modeling since linearization of dependent and independent variables improves model performance.
+
+As John Tukey famously noted: "The greatest value of a picture is when it forces us to notice what we never expected to see." Transformations help us see the underlying relationships that may be obscured by skewed distributions.
+
+**Technical Batch Effects**
+
+One critical aspect of this dataset is accounting for technical variation. The proteomics data was collected across different instrument runs, and we can extract the run order from the original PRIDE repository filenames. This run order proves to be a major source of variation that needs to be controlled for in our statistical models.
+
+```{python}
+#| label: phenotypes
+
+def runorder_from_filename(fn: str) -> int:
+    """Retrieve runorder form filename
+
+    Args:
+        fn (str): Filename ending in runorder
+
+    Returns:
+        runorder
+    Example:
+        >>> runorder_from_filename("asdf_2")
+        2
+    """
+    return int(fn.split("_")[-1])
+
+# load run order
+proteomics_file_names = pd.read_csv(PROTEOMICS_FILE_NAMES_URL, sep = "\t")
+proteomics_file_names["proteomics_runorder"] = [runorder_from_filename(fn) for fn in proteomics_file_names["File Name"]]
+proteomics_file_names["patient_id"] = proteomics_file_names["Run Label"].str.replace("_", "")
+# some samples have multiple files in the PRIDE proteomics repository but they each sample is just a single observation in the
+# final dataset. Here we'll take the max run order for each patient. These likely reflect reruns due to technical failures
+# so the max run order sample is usually the one with the best technical quality.
+proteomics_file_names = proteomics_file_names.groupby("patient_id")["proteomics_runorder"].max()
+
+# select continuos phenotypes without too many missing values
+continuous_df = forny_imputation._select_continuous_measures(supplemental_data["phenotypes"], max_missing = MAX_MISSING_PHENOTYPE)
+
+# identify transformations which improve variable normality
+normalizing_transforms = {}
+for col in continuous_df.columns:
+    normalizing_transforms[col] = transform.best_normalizing_transform(continuous_df[col])["best"]
+    
+func_transform_dict = {col: transform.transform_func_map[trans] for col, trans in normalizing_transforms.items()}
+
+# Apply transformation
+transformed_df = forny_imputation.transform_columns(continuous_df, func_transform_dict)
+
+# Create the imputer
+imputer = KNNImputer(n_neighbors=5, weights="uniform")
+
+# Fit and transform the data
+imputed_array = imputer.fit_transform(transformed_df)
+imputed_df = pd.DataFrame(imputed_array, columns=transformed_df.columns, index=transformed_df.index)
+
+binary_phenotypes = supplemental_data["phenotypes"][[col for col in supplemental_data["phenotypes"].columns if supplemental_data["phenotypes"][col].dropna().nunique() == 2]]
+
+# create a table of phenotypes
+phenotypes_df = (
+    pd.concat([
+        binary_phenotypes,
+        imputed_df
+    ], axis = 1)
+    # add proteomics run order since this is a batch effect in the proteomics data
+    .join(proteomics_file_names, how = "left")
+)
+
+forny_imputation.plot_clustered_correlation_heatmap(transformed_df)
+```
+
+The correlation heatmap reveals important structure in the clinical data. We can see block-diagonal patterns where related assays cluster together: AdoCbl assays correlate with each other, OHCbl assays form their own cluster, and these are anti-correlated with MMA excretion into urine. This correlation structure supports our K-Nearest Neighbors imputation strategy.
+
+### Organizing Results with `scverse`
+
+To make our analysis more reproducible and compatible with the broader genomics ecosystem, we'll organize our data using the `scverse` framework. This ecosystem, built around `AnnData` and `MuData` objects, provides standardized containers for genomics data that integrate observation metadata, feature annotations, and multiple data layers.
+
+**Why Use AnnData/MuData?**
+
+- **Standardization**: Common format across the Python genomics ecosystem
+- **Integration**: Easy to combine with existing tools like scanpy, muon, and scvi-tools
+- **Metadata management**: Keeps sample annotations and results together
+- **Multi-modal support**: MuData naturally handles transcriptomics + proteomics
+
+```{python}
+#| label: mdata_construction
+
+transcr_adata = ad.AnnData(
+    X = supplemental_data["transcriptomics"].T,
+    # some samples are missing
+    obs = phenotypes_df.loc[phenotypes_df.index.isin(supplemental_data["transcriptomics"].columns)],
+)
+
+protein_metadata_vars = supplemental_data["proteomics"].columns[supplemental_data["proteomics"].columns.str.startswith("PG")]
+
+proteomics_adata = ad.AnnData(
+    # drop protein metadata vars and transpose
+    X = supplemental_data["proteomics"].drop(protein_metadata_vars, axis = 1).T,
+    # some samples are missing
+    obs = phenotypes_df.loc[phenotypes_df.index.isin(supplemental_data["proteomics"].columns)],
+    var = supplemental_data["proteomics"][protein_metadata_vars],
+)
+
+mdata = md.MuData({"transcriptomics": transcr_adata, "proteomics": proteomics_adata})
+mdata
+```
+
+### Data Normalization
+
+Following the methodology from Forny et al., we apply a three-step normalization process designed to make the data more suitable for statistical analysis:
+
+1. **Filtering poorly measured features**: Remove genes with very few reads across samples
+2. **Log-transformation**: Stabilize variance and make distributions more Gaussian
+3. **Row and column centering**: Remove systematic biases while preserving biological signal
+
+**Why This Normalization Strategy?**
+
+Log-transformation is standard for both RNA-seq and proteomics data because it stabilizes variance and makes the data more normally distributed - key assumptions for many statistical tests. The iterative row and column centering approach removes systematic biases (like library size effects in RNA-seq) while preserving the biological signals we care about.
+
+```{python}
+#| label: normalization
+
+# filter to drop features with low counts
+processing.filter_features_by_counts(mdata["transcriptomics"], min_counts = READ_CUTOFF)
+
+# add a pseudocount before logging
+processing.log2_transform(mdata["transcriptomics"], pseudocount = 1)
+# proteomics has a minimum value of 1 so no pseudocounts are needed before logging
+processing.log2_transform(mdata["proteomics"], pseudocount = 0)
+
+# row and column center as per Forny paper
+processing.center_rows_and_columns_mudata(
+    mdata,
+    layer = "log2",
+    new_layer_name = "log2_centered"
+)
+```
+
+## Exploratory Data Analysis
+
+Before testing specific hypotheses, we need to understand the major sources of variation in our datasets. Principal Component Analysis (PCA) is ideal for this because it captures the directions of maximum variance without making assumptions about what should be important.
+
+**What We're Looking For:**
+
+- **Batch effects**: Technical variation that could confound biological signals
+- **Data quality**: Potential outliers or systematic biases
+- **Effect sizes**: How strong are disease signals relative to technical variation?
+- **Covariate relationships**: Which variables should be included in our models?
+
+```{python}
+#| label: scree_plot
+
+# Process each modality
+for modality in ['transcriptomics', 'proteomics']:
+    # add PCs
+    sc.pp.pca(mdata[modality], layer = ANALYSIS_LAYER)
+    
+mdata_eda.plot_mudata_pca_variance(mdata, n_pcs = int(50))
+plt.show()
+```
+
+The scree plots reveal that variance is distributed across many components rather than concentrated in just a few. This gradual decline (no sharp "elbow") indicates that there are many sources of variation rather than a few dominant factors. This is typical of patient-derived samples with genetic and environmental heterogeneity.
+
+**Correlating Principal Components with Metadata**
+
+To systematically understand what drives variation in our data, we calculate correlations between each principal component and each sample attribute. This reveals which factors (biological vs. technical) are driving the major patterns of variation.
+
+```{python}
+#| label: pc_corrplot
+
+# put these at the top regardless of significance
+PRIORITIZED_PHENOTYPES = ["date_freezing", "proteomics_runorder", "case", "OHCblPlus", "MMA_urine", "any_GI_problem"]
+
+results = mdata_eda.analyze_pc_metadata_correlation_mudata(
+    mdata,
+    n_pcs=8,
+    prioritized_vars=PRIORITIZED_PHENOTYPES,  # This will always show 'case' variable at the top
+    pca_kwargs={'svd_solver': 'arpack'},
+    figsize = (12, 7)
+)
+
+plt.show()
+```
+
+**Key Observations from PCA:**
+
+- **Batch effects dominate**: `date_freezing` and `proteomics_runorder` show stronger associations with leading PCs than disease variables. This emphasizes the importance of including these as covariates.
+
+- **Disease signals are subtle**: The weak correlation of disease markers with PCs suggests that MMA pathology involves coordinated changes in many pathways rather than dramatic shifts in a few genes/proteins.
+
+- **Technical considerations**: `proteomics_runorder` strongly affects proteomics data but not transcriptomics, validating our modality-specific covariate modeling strategy.
+
+This analysis guides our regression model specification: we'll use different covariates for each data modality based on these identified batch effects.
+
+## Supervised Analysis
+
+Now we can systematically test for associations between individual molecular features and disease phenotypes. We use Generalized Additive Models (GAMs) that allow for non-linear relationships with continuous covariates while properly controlling for the batch effects we identified.
+
+**Model Strategy:**
+
+- **Transcriptomics models**: Control for `date_freezing` using spline smoothing
+- **Proteomics models**: Control for both `date_freezing` and `proteomics_runorder`
+- **Feature-wise testing**: Each gene/protein tested independently
+- **Multiple testing correction**: FDR control across all features
+
+```{python}
+#| label: regression
+
+# Process each modality
+regression_results = list()
+for modality in mdata.mod_names:
+    
+    print(f"Processing {modality}...")
+    
+    modality_results = list()
+    # Apply regression per feature
+    for formula_name, formula in REGRESSION_FORMULAS[modality].items():
+
+        summaries = adata_regression.adata_model_fitting(
+            mdata[modality],
+            formula,
+            n_jobs=4,
+            layer = ANALYSIS_LAYER,
+            model_name = formula_name,
+            progress_bar = False
+        )
+
+        # Remove intercepts and covariates
+        mask = [name == term for name, term in zip(summaries["model_name"], summaries["term"])]
+        summaries = summaries.iloc[mask]
+
+        modality_results.append(summaries)
+    
+    # combine results and add modality first
+    modality_results = pd.concat(modality_results).assign(modality = modality)[['modality'] + [col for col in pd.concat(modality_results).columns if col != 'modality']]
+    
+    # add results to adata's modality-level var table
+    adata_regression.add_regression_results_to_anndata(
+        mdata[modality],
+        modality_results,
+        inplace = True
+    )
+    
+    regression_results.append(modality_results)
+
+regression_results_df = pd.concat(regression_results)
+
+# plot p-value histograms
+TERMS_FOR_PVALUE_HISTOGRAM = ["case", "MMA_urine", "OHCblPlus", "date_freezing"]
+stats_viz.plot_pvalue_histograms(
+    regression_results_df.query("term in @TERMS_FOR_PVALUE_HISTOGRAM"),
+    term_column = "term",
+    fdr_cutoff = 0.1
+)
+plt.show()
+```
+
+**Interpreting P-value Histograms:**
+
+P-value distributions provide powerful diagnostics for our regression models:
+
+- **Uniform distribution**: No biological signal after proper covariate adjustment
+- **Peak at low p-values**: True biological associations  
+- **Excess of high p-values**: Possible confounding or model misspecification
+
+Our results show varying levels of biological signal across different phenotypes, with `MMA_urine` and `OHCblPlus` showing clear evidence of biological associations, while `case` status shows little signal after covariate adjustment.
+
+**Validating Results: Focus on MMUT**
+
+Let's examine the top associations and verify they make biological sense by focusing on MMUT - the primary gene involved in MMA pathogenesis.
+
+```{python}
+#| label: phenotype_spotcheck
+
+PHENOTYPE_EXAMPLE = ["MMA_urine", "OHCblPlus"]
+
+for phenotype in PHENOTYPE_EXAMPLE:
+    example_stat_summaries = mdata["proteomics"].var.loc[:, mdata["proteomics"].var.columns.str.contains(phenotype)].sort_values(f"log10p_{phenotype}").head()
+    
+    print(f"Top associations with {phenotype}")
+    display(utils.style_df(example_stat_summaries))
+```
+
+```{python}
+#| label: mmut_spotcheck
+
+GENE_ASSOCIATIONS = {
+    "transcriptomics" : "ENSG00000146085",
+    "proteomics" : "P22033"
+}
+
+for modality, identifier in GENE_ASSOCIATIONS.items():
+
+    gene_summaries = mdata[modality].var.loc[mdata[modality].var_names.str.contains(identifier)]
+    df_transposed = gene_summaries.T.reset_index()
+    df_transposed.columns = ['column', 'value']  # Rename columns
+    if modality == "proteomics":
+        # remove entries starting with PG.
+        df_transposed = df_transposed[~df_transposed["column"].str.startswith("PG.")]
 
 
-## What is MMA and the Forny 2023 dataset?
+    # Extract the prefix and term from the column names
+    df_transposed['prefix'] = df_transposed['column'].str.extract(r'^([^_]+)_')
+    df_transposed['term'] = df_transposed['column'].str.extract(r'^[^_]+_(.+)$')
 
+    # Pivot to get prefixes as columns and terms as rows
+    df_pivoted = df_transposed.pivot(index='term', columns='prefix', values='value')
 
+    print(f"Top associations with {modality} {identifier}")
+    display(utils.style_df(df_pivoted))
+```
 
+**Validating Our Approach:**
 
-Open Qs?
+The regression analysis successfully identified expected biological relationships, providing confidence in our methods:
 
+- **MMUT associations**: As expected, MMUT showed strong associations with both MMA_urine and OHCblPlus biomarkers
+- **Differential patterns**: MMUT showed stronger associations with protein levels for MMA_urine but both transcript and protein levels for OHCblPlus, suggesting different biological mechanisms
+- **Statistical diagnostics**: P-value histograms indicated successful control of batch effects while preserving biological signals
 
-## Strategy for creating profiles
+**Biological insights:**
+The association patterns suggest that enzymatic activity (measured by OHCblPlus) relates to both transcript and protein levels, while metabolite accumulation (MMA_urine) primarily reflects protein-level effects. This could indicate that clinically significant metabolite accumulation requires more severe functional defects than simple changes in gene expression.
 
-1. EDA (explore the major drivers of variation)
-   a. what are the relevant measures of disease severity?
-   b. are there batch effects?
-   c. what statistical models should we use to identify features
-2. Supervised analysis
-   a. regression
-3. Unsupervised analysis
-   a. multivariate factor analysis
+{% include bio-section.html content="
+The selective correlation between MMA_urine and MMUT protein levels (but not transcript levels) suggests threshold effects in metabolite accumulation. This pattern implies that modest reductions in transcript abundance may be compensated by post-transcriptional mechanisms, but severe protein deficiency leads to clinically significant metabolite buildup. This has implications for understanding genotype-phenotype relationships and potentially for therapeutic strategies that target protein stability or function rather than just gene expression.
+" %}
 
+## Unsupervised Analysis
 
-This seems like a pretty good playbook for capturing the disease’s biology. The problem though is that I normally perform EDA and statistical analysis in R. But, I wanted to stick with Python for this work because Napistu is a Python framework and I wanted to build up support for funneling these types of datasets' findings into it.
+Single-modality analyses can miss coordinated changes across data types. For example, a metabolic pathway disruption might affect both transcript and protein levels, but not necessarily the same genes. Traditional approaches that analyze each data type separately could miss these cross-modal coordination patterns.
 
-To address this, I wanted to develop and utilize a codebase which satisfied several constraints
-- performs the key analyses supporting each problem
-- scientifically accurate
-- developable in little time
+**Multi-Omic Factor Analysis (MOFA)** addresses this limitation by:
 
-This seems to be a classic case of the eternal software problem, you can't have all of {fast, good, and cheap}, pick two. Can genAI help us to achieve all three? It's very good at fast & cheap so we can use them to create good analyses.
+1. **Joint modeling**: Simultaneously analyzes transcriptomics and proteomics
+2. **Latent factor discovery**: Finds hidden programs of coordinated variation
+3. **Cross-modal integration**: Links changes across different molecular layers
+4. **Dimensionality reduction**: Captures complex multi-dimensional patterns in interpretable factors
 
-- Brittle - tries to get too fancy by building advanced features; many arguments; no testing
-- Unmaintainable - writing mountains of code; little focus on refactoring; limited docstrings; no type hints
-Wrong - brittle and unmaintainable code is not the end of the world in a 1-off analysis but genAI can make implementation decisions which are scientifically inaccurate. A couple that I ran into during this analysis are:
-Parsing the dependent variables out a regression formula (e.g., y ~ a + b) and turning it into separate tests (y ~ a & y ~ b).
-- Treating p-values and q-values interchangeably where if q-values are missing it would filter on p-values < fdr_cutoff to identify discoveries.
+Each factor represents a biological or technical program with two key components:
+- **Loadings**: Which features (genes/proteins) participate in the program
+- **Usages**: How much each sample expresses this program
 
-The scary part is that wrong details can be hidden under layers of brittle, unmaintainable code.
+**Hyperparameter Optimization**
 
+MOFA requires selecting the optimal number of factors. Too few factors miss important biological programs; too many factors create noise and overfitting. We systematically test different numbers of factors and select based on variance explained and factor interpretability.
 
+```{python}
+#| label: mofa_factor_scan
 
+# update the MuData object so `nvars and `nobs` are appropriate`
+intersected_mdata = md.MuData({k: v for k, v in mdata.mod.items()})
 
+muon.pp.intersect_obs(intersected_mdata)  # This modifies mdata in-place
 
+# Run the factor scan
+results_dict = mdata_factor_analysis.run_mofa_factor_scan(
+    intersected_mdata, 
+    factor_range=FACTOR_RANGE,
+    use_layer=ANALYSIS_LAYER,  # Adjust to your normalized layer
+    models_dir=MOFA_PARAM_SCAN_MODELS_PATH,
+    overwrite=OVERWRITE
+)
 
+# Extract variance metrics from all models
+metrics = mdata_factor_analysis.calculate_variance_metrics(results_dict)
+
+mdata_factor_analysis.visualize_factor_scan_results(metrics, user_factors=OPTIMAL_FACTOR)
+plt.show()
+```
+
+The factor scan results help us identify the optimal model complexity. We're looking for the point where additional factors provide diminishing returns in terms of variance explained, while avoiding overfitting that would make factors less interpretable.
+
+**Fitting the Optimal Model**
+
+With 30 factors selected as optimal, we fit the final MOFA model and examine the factor characteristics:
+
+```{python}
+#| label: optimal_mofa_summary
+
+if not os.path.isfile(OPTIMAL_MODEL_H5MU_PATH) or OVERWRITE:
+
+    optimal_model = mdata_factor_analysis.create_minimal_mudata(
+        intersected_mdata,
+        include_layers=[ANALYSIS_LAYER],
+        include_obsm=True,
+        include_varm=True
+    )
+
+    mdata_factor_analysis._mofa(
+        optimal_model,
+        n_factors=OPTIMAL_FACTOR,
+        use_obs=None,
+        use_var=None,
+        use_layer=ANALYSIS_LAYER,
+        convergence_mode="medium",
+        verbose=False,
+        save_metadata=True
+    )
+
+    md.write_h5mu(OPTIMAL_MODEL_H5MU_PATH, optimal_model)
+else:
+    optimal_model = md.read_h5mu(OPTIMAL_MODEL_H5MU_PATH)
+    
+mdata_factor_analysis.plot_mofa_factor_histograms(optimal_model)
+plt.show()
+```
+
+**Identifying Disease-Relevant Factors**
+
+With 30 factors extracted, we need to identify which ones capture disease biology versus technical variation or normal biological heterogeneity. Our strategy is to regress factor usages (how much each sample expresses each factor) against disease phenotypes:
+
+- **Significant associations**: Factors that vary with disease severity measures
+- **Effect sizes**: How much of factor variation is explained by disease  
+- **Biological coherence**: Do factor loadings make biological sense?
+
+Factors with strong associations to multiple disease measures are prime candidates for network analysis in the next post.
+
+```{python}
+#| label: factor_regression
+
+# Apply regression per factor
+factor_regressions = list()
+for formula_name, formula in REGRESSION_FORMULAS["transcriptomics"].items():
+
+    # Run regression analysis
+    regression_results = mdata_factor_analysis.regress_factors_with_formula(
+        optimal_model,
+        formula=formula,
+        factors=None,  # Use all factors
+        progress_bar=False
+    ).assign(formula_name = formula_name)
+
+    factor_regressions.append(regression_results)
+    
+    # Generate summary table
+    summary_table = mdata_factor_analysis.summarize_factor_regression(
+        regression_results,
+        # loosen the FDR cutoff here, around MMA-relevant gene expression programs
+        alpha=0.3,
+        group_by_factor=False
+    ).query(f"term == '{formula_name}'")
+
+    print(f"Factors associated with {formula_name}")
+    display(utils.style_df(summary_table))
+
+factor_regressions_df = pd.concat(factor_regressions)
+optimal_model.uns["factor_regressions"] = factor_regressions_df
+```
+
+The factor regression results reveal which latent programs are associated with disease phenotypes. Unlike the feature-level analysis where individual genes/proteins might show modest associations, factors can capture coordinated programs involving dozens or hundreds of features, providing more robust and interpretable disease signatures.
+
+## Summary and Next Steps
+
+This analysis demonstrates a systematic approach to extracting disease-relevant molecular profiles from multi-modal genomics data. Using the Forny et al. MMA dataset, we've shown how careful data processing, covariate adjustment, and both supervised and unsupervised methods can reveal subtle but biologically meaningful disease signals.
+
+**Key methodological advances:**
+- **Batch effect management**: Successful identification and control of technical variation while preserving biological signals
+- **Multi-modal integration**: Effective use of factor analysis to discover coordinated programs across transcriptomics and proteomics
+- **Quantitative biomarkers**: Demonstration that continuous disease measures provide more statistical power than binary classifications
+
+**Biological insights:**
+- **MMUT associations**: Confirmed expected relationships while revealing nuanced patterns between different biomarkers
+- **Coordinated programs**: Identified latent factors that capture system-level responses to metabolic dysfunction
+- **Statistical validation**: P-value diagnostics confirmed successful modeling strategies
+
+**Looking ahead to network analysis:**
+
+While our statistical approach successfully identified disease-associated molecular programs, interpreting their biological significance requires additional context. In the next post, we'll map these profiles onto biological networks using Napistu to:
+
+- **Connect statistical associations to known pathways**: Link our factor loadings to established biological mechanisms
+- **Identify upstream regulators**: Trace disease signals from downstream effects to potential therapeutic targets  
+- **Generate testable hypotheses**: Convert statistical associations into mechanistic predictions
+
+{% include ai-aside.html content="
+This project highlighted both the strengths and limitations of AI-assisted analysis. While AI tools excel at generating statistical pipelines and visualization code, biological interpretation and methodological decisions require significant human expertise. The most valuable AI contributions were in code generation and documentation, while the most critical human contributions were in experimental design, covariate selection, and biological interpretation of results.
+" %}
+
+The integration of statistical rigor with biological validation provides a foundation for network-based discovery, setting the stage for translating molecular associations into mechanistic understanding.
+
+---
+
+*This analysis illustrates how modern multi-modal approaches can reveal subtle disease mechanisms in complex datasets. By combining statistical power with biological validation, we create molecular profiles ready for network-based therapeutic discovery.*

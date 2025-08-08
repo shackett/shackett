@@ -1,0 +1,42 @@
+---
+title: "Scientific Programming with MCP and AI"
+author: "Shackett"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+format:
+  html:
+    embed-resources: true
+    code-fold: true
+    code-summary: "Show the code"
+    toc: true
+    theme: minty
+    highlight: tango
+    code-block-bg: true
+    code-block-border-left: "#5BB867"
+---
+
+In this post I'll share my recent (soon to be outdated) experience extending and maintaining a scientific codebase, [Napistu](https://github.com/napistu/napistu) using modern agentic frameworks code development (Cursor & Claude). 
+
+🚀 These approaches are amazing! They can massively increase productivity by efficiently tackling routine tasks, lowering the activation energy for skill development and simplifying debugging. These contributions not only save devs time, they also preserve our mental energy for critical tasks - I love just throwing a set of pytest failures at an agent and saying "you deal with it". 
+
+⚠️ But, this hands-off, vibe coding, mentality can easily get you into trouble. Its easy for AI agents to not follow common design patterns, to duplicate code, to over-engineer irrelevant features, and to produce straight-up brittle, buggy code. This can easily render a project unmaintainable.
+
+🎯 Many of us are trying to navigate this tension - looking for a sweet spot where AI maximizes productivity. We are also looking for how to shift this sweet spot - finding tasks where agents performance can be shifted from dubious to quality.
+
+🛠 Here, I'll share some approaches that I've found that are particularly helpful for scientific programming in the age of AI. Here, a critical challenge is providing the right information to up-front and allowing agents to surface relevant information on-demand. To do this we can use the Model Context Protocol (MCP) provide information in a format suitable for AI models. In this post, **I'll discuss the development of a Napistu MCP server, how I deployed it to Cloud Run via Github Actions, and provide some case studies of how agents operate with and without using the MCP server**.
+
+## What does developing scientific software look like?
+
+
+
+
+## Model Context Protocol
+
+
+## Developing a Napistu MCP Server
+
+
+
+## Deploying a remote server to Cloud Run
+
+
+## Case studies - agents +/- Napistu MCP

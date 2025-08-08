@@ -1,0 +1,726 @@
+---
+title: "Napistu = High-Dimensional Data + Genome-Scale Networks"
+author: "Shackett"
+format:
+  html:
+    embed-resources: true
+    code-fold: true
+    code-summary: "Show the code"
+    toc: true
+    theme: minty
+    highlight: tango
+    code-block-bg: true
+    code-block-border-left: "#5BB867"
+jupyter: forny-2023
+engine: jupyter
+---
+
+This is part two of a two-part series highlighting **Napistu**, a new framework for building genome-scale networks of molecular biology and biochemistry and interrogating them with high-dimensional data. The series explores how we can move beyond traditional gene set enrichment approaches to understand disease mechanisms through network-based analysis.
+
+## The Challenge of Multi-Modal Disease Analysis
+
+Modern genomics generates increasingly complex datasets - transcriptomics, proteomics, metabolomics - each capturing different aspects of biological systems. Traditional approaches analyze these data types separately, potentially missing coordinated changes that span molecular layers. Even when we successfully identify disease-associated genes or proteins, interpreting their biological significance and identifying upstream regulatory causes remains challenging.
+
+{% include bio-section.html content="
+Gene Set Enrichment Analysis (GSEA) has been the gold standard for biological interpretation, but it's fundamentally limited by pre-defined pathway annotations. Many disease mechanisms involve novel combinations of known pathways or regulatory interactions not captured in standard databases. Network-based approaches can transcend these limitations by representing biological systems as graphs where information can flow between any connected components, revealing emergent patterns not visible in static pathway definitions.
+" %}
+
+## The Promise of Network Biology
+
+Network-based approaches offer a powerful alternative by representing biological systems as graphs where molecules (genes, proteins, metabolites) are vertices connected by regulatory relationships. This representation allows us to:
+
+- **Trace causal chains**: Follow information flow from disease symptoms to upstream regulatory causes
+- **Integrate multiple data types**: Map different molecular measurements onto the same network structure  
+- **Discover emergent patterns**: Identify coordinated programs spanning traditional pathway boundaries
+- **Generate therapeutic hypotheses**: Identify regulatory nodes that could be targeted for intervention
+
+**Napistu's Implementation**
+
+Napistu makes these network biology concepts practical through its integrated workflow: the `species_data` system handles systematic identifier mapping (Ensembl genes, UniProt proteins, etc.) and resolves many-to-one mappings to create unified representations across multi-modal datasets. Network propagation methods like personalized PageRank then trace disease signals through the network, while multiple null distribution strategies (vertex permutation, edge permutation, parametric nulls) provide rigorous statistical testing to distinguish meaningful biological patterns from connectivity artifacts.
+
+{% include ai-aside.html content="
+AI coding assistants promise huge productivity gains, but building reliable pipelines for connecting diverse biological data types often requires solving genuinely novel problems that push beyond what LLMs have encountered. The result is an interesting tension: how do you leverage AI's speed for routine coding tasks while ensuring correctness when breaking new ground? I'll demonstrate this balance with two concrete examples later in this post, showing how I used AI tools to develop new Napistu features.
+" %}
+
+## Series Overview
+
+**Part 1: Creating Multimodal Disease Profiles** established the foundation by systematically extracting disease-relevant molecular signatures from the Forny et al. methylmalonic acidemia dataset. Through careful batch effect correction and both supervised and unsupervised analyses, we identified coordinated programs of gene and protein expression associated with disease severity measures. This preprocessing created clean, quantitative molecular profiles ready for network integration.
+
+In this second post, we'll contextualize these statistical signals within genome-scale biological networks using Napistu. At a high-level, this involves:
+
+• **Data Integration and Mapping**: The analysis demonstrates how to integrate multi-omics datasets (transcriptomics and proteomics) from MuData/AnnData objects onto biological pathway networks by mapping systematic identifiers (like Ensembl genes and UniProt proteins) to network species, handling many-to-one mappings, and embedding the results as tables in the pathway model's species_data attribute.
+
+• **Network Attribute Assignment**: Multiple strategies are shown for transferring experimental data from species_data tables to graph vertices, including during network creation with graph attribute dictionaries and post-creation using specialized functions. The approach supports flexible data transformations (like taking absolute values or -log10 of p-values) to prepare attributes for downstream network analysis.
+
+• **Network Propagation Analysis**: The workflow applies personalized PageRank to propagate information through the biological network, using vertex attributes as reset probabilities to identify network regions enriched for experimental signals. Results are compared against vertex permutation distributions to control for connectivity biases and highlight biologically meaningful network modules that show coordinated responses to the experimental conditions.
+
+To reproduce this analysis, run the first notebook in the series, then <<TO DO>>
+
+# Setup
+
+```{r}
+reticulate::use_virtualenv("~/Desktop/GITHUB/napistu/lib/napistu-scrapyard/applications/forny_2023/.venv", required = TRUE)
+
+```
+
+```{python}
+#| label: env_setup
+#| echo: false
+
+import os
+import re
+from types import SimpleNamespace
+
+import mudata as md
+import numpy as np
+import pandas as pd
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+from napistu.sbml_dfs_core import SBML_dfs
+from napistu import utils as napistu_utils
+from napistu.gcs import downloads
+from napistu.matching import mount
+from napistu.network.ng_core import NapistuGraph
+from napistu.network import net_propagation
+from napistu.network import data_handling
+from napistu.network import ng_utils
+from napistu.scverse.loading import prepare_anndata_results_df
+from napistu.scverse.loading import prepare_mudata_results_df
+from napistu.constants import ONTOLOGIES
+from napistu.matching.constants import BIND_DICT_OF_WIDE_RESULTS_STRATEGIES_LIST
+
+from shackett_utils.statistics import hypothesis_testing
+from shackett_utils.statistics import multi_model_fitting
+
+# setup logging
+import logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+logging.getLogger('matplotlib.font_manager').setLevel(logging.WARNING)
+
+# File paths and data organization
+# All input data should be placed in the SUPPLEMENTAL_DATA_DIR
+# Cached results and models will be stored in CACHE_DIR
+
+# paths
+PROJECT_DIR = os.path.expanduser("~/napistu_mma_posts")
+INPUT_DATA_DIR = os.path.join(PROJECT_DIR, "input")
+CACHE_DIR = os.path.join(PROJECT_DIR, "cache")
+
+# inputs
+# model to download from GCS and store in NAPISTU_DATA_DIR
+NAPISTU_ASSET = "human_consensus"
+# H5Mu file containing the optimal model from MOFA+ and regression summaries
+OPTIMAL_MODEL_H5MU_OUTFILE = "mofa_optimal_model.h5mu"
+
+# intermediate files
+PPR_NULL_CACHE_OUTFILE = "ppr_null_cache.tsv"
+
+# outputs
+PPR_RESULTS_OUTFILE = "ppr_results.tsv"
+SBML_DFS_W_DATA_OUTFILE = "sbml_dfs_w_data.pkl"
+NAPISTU_GRAPH_W_DATA_OUTFILE = "napistu_graph_w_data.pkl"
+
+# Paths to input/output files
+OPTIMAL_MODEL_H5MU_PATH = os.path.join(CACHE_DIR, OPTIMAL_MODEL_H5MU_OUTFILE)
+PPR_NULL_TMP_PATH = os.path.join(CACHE_DIR, PPR_NULL_CACHE_OUTFILE)
+PPR_RESULTS_PATH = os.path.join(PROJECT_DIR, PPR_RESULTS_OUTFILE)
+SBML_DFS_W_DATA_PATH = os.path.join(PROJECT_DIR, SBML_DFS_W_DATA_OUTFILE)
+NAPISTU_GRAPH_W_DATA_PATH = os.path.join(PROJECT_DIR, NAPISTU_GRAPH_W_DATA_OUTFILE)
+
+# dataset metadata
+FORNY_MODALITIES = SimpleNamespace(
+    TRANSCRIPTOMICS = "transcriptomics",
+    PROTEOMICS = "proteomics"
+)
+
+MODALITIES = list(FORNY_MODALITIES.__dict__.values())
+
+# Napistu controlled vocabulary
+FORNY_ONTOLOGIES = SimpleNamespace(
+    ENSEMBL_GENE = ONTOLOGIES.ENSEMBL_GENE,
+    UNIPROT = ONTOLOGIES.UNIPROT
+)
+
+FORNY_DEFS = SimpleNamespace(
+    # varm table names set in part
+    LFS = "LFs",
+    # table names used to add data sources to `sbml_dfs`
+    MOFA_LFS = "mofa_lfs",
+    VAR_LEVEL_RESULTS = "var_level_results",
+    # template for is_X variables will be used to restrict vertex permutation
+    # to measured proteins/transcripts
+    INDICATOR_STR = 'is_{modality}',
+    MODALITY_VAR_LEVEL_RESULTS_STR = "{modality}_var_level_results" 
+)
+
+MUDATA_ONTOLOGIES = {
+    # these dicts indicate the ontology that we want to match against for each modality
+    # and indicate that this ontology's identifiers are present in the .var table's index
+    FORNY_MODALITIES.TRANSCRIPTOMICS :
+        {
+            "ontologies" : [FORNY_ONTOLOGIES.ENSEMBL_GENE],
+            "index_which_ontology" : FORNY_ONTOLOGIES.ENSEMBL_GENE
+        },
+    FORNY_MODALITIES.PROTEOMICS :
+        {
+            "ontologies" : [FORNY_ONTOLOGIES.UNIPROT],
+            "index_which_ontology" : FORNY_ONTOLOGIES.UNIPROT
+        }
+}
+
+# attributes to use for network propagation
+LFS_OF_INTEREST = ["LF1", "LF2", "LF3", "LF4", "LF5"]
+
+# regression terms to add from var table
+PPR_LINEAR_PHENOTYPES = {"MMA_urine", "OHCblPlus", "responsive_to_acute_treatment"}
+PPR_SMOOTH_PHENOTYPES = {"date_freezing", "proteomics_runorder"}
+
+VAR_VARS = list()
+for phenotype in PPR_LINEAR_PHENOTYPES:
+    VAR_VARS.append(f"est_{phenotype}")
+    VAR_VARS.append(f"stat_{phenotype}")
+    # using -log10p since normal p- and q-values will underflow
+    VAR_VARS.append(f"log10p_{phenotype}")
+    VAR_VARS.append(f"q_{phenotype}")
+for phenotype in PPR_SMOOTH_PHENOTYPES:
+    VAR_VARS.append(f"q_{phenotype}")
+
+
+def hard_thresholded_nlog10(x):
+    if x == 0:
+        return 10
+    elif x < FDR_CUTOFF: # fdr cutoff
+        return -np.log10(x)
+    else:
+        return 1e-10
+
+CUSTOM_TRANSFORMATIONS = {
+    # take the absolute value
+    "abs" : lambda x: abs(x),
+    "negate" : lambda x: -x,
+    # -log10[pvalue]
+    "nlog10" : lambda x: -np.log10(x),
+    # threshold based on loose FDR threshold and then transform   
+    "hard_thresholded_nlog10" : hard_thresholded_nlog10,
+    "square" : lambda x: x**2
+}
+
+# defining variables to add as vertex attributes and how to transform them so
+# they are appropriate for personalized pagerank reset probability
+ATTRIBUTES_TO_GRAPH_SPEC = [
+  {
+    "attribute_names": "LF",
+    "table_name": FORNY_DEFS.MOFA_LFS,
+    "transformation": "square"
+  },
+  {
+    "attribute_names": "^est_",
+    "table_name": FORNY_DEFS.VAR_LEVEL_RESULTS,
+    "transformation": "square"
+  },
+  {
+    "attribute_names": "^stat_",
+    "table_name": FORNY_DEFS.VAR_LEVEL_RESULTS,
+    "transformation": "abs"
+  },
+  {
+    "attribute_names": "^log10p_",
+    "table_name": FORNY_DEFS.VAR_LEVEL_RESULTS,
+    "transformation": "negate"
+  },
+  {
+    "attribute_names": "^q_",
+    "table_name": FORNY_DEFS.VAR_LEVEL_RESULTS,
+    "transformation": "hard_thresholded_nlog10"
+  },
+]
+
+ATTRIBUTES_TO_GRAPH_SPEC = ATTRIBUTES_TO_GRAPH_SPEC + [{
+    "attribute_names": FORNY_DEFS.INDICATOR_STR.format(modality = m),
+    "table_name": FORNY_DEFS.MODALITY_VAR_LEVEL_RESULTS_STR.format(modality = m),
+    "transformation": "identity"
+} for m in MODALITIES]
+
+# masks from vertex attribute name to modality to use during vertex permutation 
+REGEXES_TO_MASKS = { x: FORNY_DEFS.INDICATOR_STR.format(modality = x) for x in MODALITIES }
+
+# utility functions
+
+def floor_pvalue_by_resolution(p_value, n_samples):
+    """
+    Floor p-values by resolution.
+    """
+    
+    return (p_value + 1 / n_samples) * (n_samples / (n_samples + 1))
+
+def create_stacked_barplot_seaborn(df):
+    """
+    Alternative version using seaborn styling
+    """
+    # Set seaborn style
+    sns.set_style("whitegrid")
+    
+    # Group by measure and sum counts across modalities
+    total_counts = df.groupby('measure')['count'].sum().sort_values(ascending=False)
+    
+    # Create pivot table
+    pivot_df = df.pivot_table(index='measure', columns='modality', values='count', fill_value=0)
+    pivot_df = pivot_df.reindex(total_counts.index)
+    
+    # Create the plot
+    fig, ax = plt.subplots(figsize=(16, 8))
+    
+    # Use seaborn color palette
+    colors = sns.color_palette("husl", len(pivot_df.columns))
+    
+    # Plot stacked bars
+    pivot_df.plot(kind='bar', stacked=True, ax=ax, color=colors, alpha=0.8)
+    
+    # Customize
+    ax.set_title('Stacked Barplot by Attributes and Modality', fontsize=16, fontweight='bold')
+    ax.set_xlabel('Attributes (ordered by total count)', fontsize=12)
+    ax.set_ylabel('Count', fontsize=12)
+    ax.legend(title='Modality', bbox_to_anchor=(1.05, 1), loc='upper left')
+    
+    plt.xticks(rotation=45, ha='right')
+    plt.tight_layout()
+    plt.show()
+    
+    return fig, ax
+
+# constants affecting behavior
+FDR_CUTOFF = 0.1 # just used for hard thresholding in this analysis
+N_NULL_SAMPLES = 100
+OVERWRITE = False
+```
+
+## Loading MMA molecular profiles
+
+
+```{python}
+#| label: data_loading
+
+# lets load the Forny results so we can try adding a few different types of tables to the sbml_dfs
+mdata = md.read_h5mu(OPTIMAL_MODEL_H5MU_PATH)
+
+# create an indicator which just highlights which modalities are present in the mdata
+# this will propagate this indicator to vertices in the graph which is useful for generating
+# a mask for constructing vertices' null distributions
+ADATA_LEVEL_VARS = dict()
+for modality in MODALITIES:
+    indicator_var = FORNY_DEFS.INDICATOR_STR.format(modality=modality)
+    # add to var table
+    mdata[modality].var[indicator_var] = 1
+    # indicate that this should be added to the sbml_dfs later
+    ADATA_LEVEL_VARS[modality] = [indicator_var]
+```
+
+## Loading Napistu networks
+
+
+```{python}
+#| label: napistu_setup
+
+# this will download the sbml_dfs, napistu_graph, and species_identifiers from a public GCS bucket
+# or if they already exist in the NAPISTU_DATA_DIR, it will just set the path to the existing asset
+sbml_dfs_path = downloads.load_public_napistu_asset(
+    asset = NAPISTU_ASSET,
+    data_dir = INPUT_DATA_DIR,
+    subasset = "sbml_dfs"
+)
+
+napistu_graph_path = downloads.load_public_napistu_asset(
+    asset = NAPISTU_ASSET,
+    data_dir = INPUT_DATA_DIR,
+    subasset = "napistu_graph"
+)
+
+species_identifiers_path = downloads.load_public_napistu_asset(
+    asset = NAPISTU_ASSET,
+    data_dir = INPUT_DATA_DIR,
+    subasset = "species_identifiers"
+)
+
+# ~2 min load
+sbml_dfs = SBML_dfs.from_pickle(sbml_dfs_path)
+
+napistu_graph = NapistuGraph.from_pickle(napistu_graph_path)
+
+species_identifiers = pd.read_csv(species_identifiers_path, delimiter = "\t")
+
+ng_utils.validate_assets(
+    sbml_dfs = sbml_dfs,
+    napistu_graph = napistu_graph,
+    identifiers_df = species_identifiers
+)
+```
+
+# Adding data to networks
+
+To use an 'omic dataset in Napistu, we want to:
+1. mount the dataset on the pathway `sbml_dfs`. This entails:
+    - matching systematic identifiers between the dataset and pathway to connect 'omic features to Napistu `species`.
+    - resolve many-to-1 mappings (e.g., where 2+ features match the same species).
+    - create a table with unique species ids as the index with variable from the dataset.
+    - add this to the `species_data` attribute of the `sbml_dfs`. Multiple tables and/or datasets can be added to `species_data`.
+2. pass variables from one or more `species_data` tables to a `napistu_graph`'s vertices with `net_create._add_graph_species_attribute`. Variables can be transformed (e.g., to make them non-negative for personalized pagerank) at this point (or this could be done before step (1)).
+3. use these vertex attributes for downstream analysis (e.g., using it in the reset_proportional_to parameters of PPR).
+
+## Data to `SBML_dfs`
+
+To figure out what results we're interested in digging into further with network methods we can first take a look at the actual `MuData` object we created in previous analysis. From this summary their are `MuData`-level attributes like the Multi Omic Factor Analysis (MOFA) results, and modality-level `AnnData` attributes including sample attributes (`obs`), feature attributes (`var`), measurements (`X` and `layers`) and various other tensors defined over features or samples (`obsm`, `varm`). 
+
+```{python}
+mdata
+```
+
+Any of these attributes which is defined over features (MuData or AnnData) level `var`, `varm`, `X`, or `layers` can be easily "mounted" onto a NapistuGraph using workflows which abstract away some of the minutiae of identifier mapping, disambiguation, and complex membership. Three inputs are supported:
+
+- `mudata.MuData` objects containing multiple `AnnData` objects where `var` and `varm` attributes can be defined across multiple datasets.
+- `anndata.AnnData` objects where the `var` table provided identifiers, and feature-level summaries come from either the `var`, `varm` or `X` tables.
+- `pd.DataFrame` objects which including 1+ systematic identifiers
+
+Here, we'll provide a detailed example of mounting results from a MuData object, while highlighting how one could easily add loose results from a DF or AnnData object.
+
+### Adding Latent Factors
+
+In the previous post, we used Multi-Omics Factor Analysis (MOFA) to decompose the dataset into 30 covarying factors. The factor loadings are stored as a 13.9K x 30 matrix `mdata.varm["LFs"]`.
+
+The `prepare_mudata_results_df` function prepares this tensor for Napistu by pulling one or more modality-specific systematic identifiers from `.var` attributes and combining them the modalities factor loadings. The extracted results are returned as a dict since we may want to approach combining results across modalities in several ways.
+
+```{python}
+#| label: extracting_profiles_lfs
+
+mofa_lfs = prepare_mudata_results_df(
+    mdata,
+    mudata_ontologies=MUDATA_ONTOLOGIES,
+    table_type="varm",
+    table_name=FORNY_DEFS.LFS, # this would be autodetected
+    results_attrs=LFS_OF_INTEREST,
+    table_colnames=[f"LF{i}" for i in range(1, mdata.varm[FORNY_DEFS.LFS].shape[1] + 1)]
+)
+
+for modality in MODALITIES:
+    print(f"Extracted latent factors for {modality})
+    display(mofa_lfs[modality].head(5))
+```
+
+To add these results to an `SBML_dfs` object involves creating a `species_data` pd.DataFrame with 0-1 rows for each distinct molecular species in the model. The molecular species themselves are associated with various genic and molecular ontologies (`ensembl`, `uniprot`, `entrez`, `uniprot`, among others). Napistu supports distinguishing genes, transcripts, and proteins as distinct molecular species (`dogmatic` mode) but the model we loaded above ignores this distinction and genes, transcripts, and proteins are merged into a single molecular species. 
+
+So, adding data to the pathway representation involves both merging based on identifiers but also handling ambiguity (how do we handle a transcript and protein mapping to the same species; what happens if we have distinct proteins which map to the same species). These issues are addressed by the `mount.bind_dict_of_wide_results` function. Here, we'll stagger the results to maintain separate attributes for latent factors depending on whether they pertain to transcripts or proteins.
+
+
+```{python}
+#| label: binding_lfs
+
+mount.bind_dict_of_wide_results(
+    sbml_dfs,
+    mofa_lfs,
+    FORNY_DEFS.MOFA_LFS,
+    strategy = "stagger",
+    species_identifiers = species_identifiers,
+    # ontologies were already renamed to the controlled vocabulary in prepare_mudata_results_df()
+    ontologies = None,
+    # ignored because species_identifiers is provided
+    dogmatic = False,
+    # for clarity; default is True
+    inplace = True,
+    verbose = False
+)
+
+display(napistu_utils.style_df(sbml_dfs.species_data[FORNY_DEFS.MOFA_LFS].head(5)))
+```
+
+### Adding statistical summaries and modality masks 
+
+```{python}
+#| label: binding_results_to_sbml_dfs
+
+# now we can add .var attributes from the mdata
+diffex_results = prepare_mudata_results_df(
+    mdata,
+    mudata_ontologies=MUDATA_ONTOLOGIES,
+    table_type="var",
+    results_attrs=VAR_VARS,
+    level = "adata"
+)
+
+display(napistu_utils.style_df(diffex_results.head(5)))
+
+mount.bind_dict_of_wide_results(
+    sbml_dfs,
+    diffex_results,
+    FORNY_DEFS.VAR_LEVEL_RESULTS,
+    strategy = "stagger",
+    species_identifiers = species_identifiers,
+    verbose = False
+)
+
+for modality in MODALITIES:
+    anndata_results_df = prepare_anndata_results_df(
+        mdata[modality],
+        table_type="var",
+        index_which_ontology = MUDATA_ONTOLOGIES[modality]["index_which_ontology"],
+        results_attrs=ADATA_LEVEL_VARS[modality]
+    )
+
+    mount.bind_wide_results(
+        sbml_dfs,
+        anndata_results_df,
+        FORNY_DEFS.MODALITY_VAR_LEVEL_RESULTS_STR.format(modality = modality),
+        species_identifiers = species_identifiers,
+        ontologies = MUDATA_ONTOLOGIES[modality]["ontologies"]
+    )
+
+```
+
+
+## Adding Attributes to a Graph
+
+Now, we can pass attributes of interest from species_data tables to the Napistu graph object. We can do this either during a graph's creation or after-the-fact. Here we'll demo three approaches:
+
+- adding data during creation with a graph attributes dictionary.
+- adding data after creation with a graph attributes dictionary.
+- adding data after creation with `data_handling.add_results_table_to_graph()` a more limited, but (relatively) user-friendly approach. 
+
+### Creating an appropriate graph with data attributes.
+
+For many applications we could use the pre-built Napistu graph which is bundled in the human consensus model:
+
+```python
+napistu_graph_path  = downloads.load_public_napistu_asset(
+    asset = "human_consensus",
+    data_dir = NAPISTU_DATA_DIR,
+    subasset = "regulatory_graph"
+)
+napistu_graph = napistu_utils.load_pickle(napistu_graph_path)
+```
+
+But, to apply personalized pagerank on a directed graph we actually want to flip the edges in the graphs so information flows from targets to regulators. So, we'll create an appropriate graph on-the-fly and we'll also add edge weights to it and pass some attributes from species_data to vertices.
+
+
+```{python}
+#| label: set_graph_attributes
+
+# create a copy of the graph
+napistu_graph.reverse_edges()
+assert napistu_graph.is_reversed
+
+for attr_to_graph in ATTRIBUTES_TO_GRAPH_SPEC:
+  
+  data_handling.add_results_table_to_graph(
+    napistu_graph,
+    sbml_dfs,
+    attribute_names = attr_to_graph["attribute_names"],
+    table_name = attr_to_graph["table_name"],
+    transformation = attr_to_graph["transformation"],
+    custom_transformations = CUSTOM_TRANSFORMATIONS
+  )
+  
+napistu_graph.vs[0].attributes()
+```
+
+## Network Propagation
+
+Here we'll implement a workflow for applying personalized pagerank (PPR) to a napistu_graph's vertex attributes.
+
+To reason with PPR scores we will pull together a few pieces of information:
+
+- the actual PPR score derived from applying network propagation to attributes of interest. High values here may be interesting but they also bake in two types of biases.
+    - topological bias: certain regions of the network are more highly connect and the in- and out-degree of vertices and the local connectivity of the network in general can cause arbitrary signals to pool in particular regions of the network. This is a broadly appreciated problem in network analysis. To combat this bias we can compare individual vertices to null distributions constructed by randomizing the network. Several types of null distributions are included in Napistu - those which are most relevant for addressing topological biases are the non-parameteric `vertex_permutation` or the `parametric_null`.
+    - ascertainment bias: we are only measuring a subset of vertices in the network and this will also naturally pool signal in particular regions of the network. For example, if we were to apply network propagation to the results from a metabolomics experiment the signals would naturally be concentrated in central carbon metabolism. To address this we want to constrain our null randomization to only permutate/resample signals from vertices which are actually defined for the attribute. In the case of metabolomics this would mean shuffling metabolite-level summaries and reapplying network propagation to assess whether the signal converged on subnetworks more robustless in observed vs null statistics.
+- the quantile of each observed score (for a single vertex * attribute combination) compared to a null distribution for this vertex constructed by applying `N_NULL_SAMPLE` instances of `vertex_permutation` constrained by a suitable vertex mask abrogating ascertainment bias.
+- p-values for observed scores compared to null quantiles. Generally we are interested in right-tailed p-values because we are interested in subgraphs which are enriched for attribute-level signals rather than those that are depleted for signal (the left tail). The issue here is that strong biological signals will indeed enriched signals in a subset of vertices but they will also naturally deplete signals in other regions of network space. To account for this fact we can do a few things:
+    1. calculate two-tailed p-values based on the null quantiles which bake in both significant enrichments and depletions.
+    2. flag vertices which are in the left (depleted) and right (enriched) tail so that we can filter to vertices which are statistically significantly enriched
+    3. apply FDR control separately on the depleted and enriched p-values. The depletion signals are actually STRONGER than the enrichments (lower pi0) so applying FDR control to all p-values would be anti-conservative q-values for enriched signals.
+- q-values stratified by attribute and positive vs negative enrichments. Currently this uses BH since all of the Python implementaitons of q-value (Storey & Tibshirani) that I've tried are flawed.
+
+We'll export a table with each (vertex x attribute) and its PPR score, p-value, whether its enriched or depleted and its q-value to provide flexibility in downstream uses. 
+
+Generally, we'll filter to:
+- an attribute of interest
+- vertices less than an FDR cutoff (significant)
+- vertices enriched for signals 
+
+```{python}
+#| label: select_ppr_attributes
+
+annotated_vertices = napistu_graph.get_vertex_dataframe()
+
+# find valid attributes - numeric + 1+ non-zero values
+invalid_attributes = [x for x in annotated_vertices.columns if annotated_vertices[x].dtype not in ["float64", "int64"] or annotated_vertices[x].nunique() == 1]
+valid_attributes = [x for x in annotated_vertices.columns if x not in invalid_attributes]
+
+logger.info(f"Invalid attributes: {invalid_attributes}")
+logger.info(f"Valid attributes: {valid_attributes}")
+
+# create masks for each modality
+assert [x in valid_attributes for x in REGEXES_TO_MASKS.values()]
+valid_attributes = list(set(valid_attributes) - set(REGEXES_TO_MASKS.values()))
+
+attr_masks = dict()
+for attr in valid_attributes:
+    for regex, mask in REGEXES_TO_MASKS.items():
+        if re.search(regex, attr):
+            attr_masks[attr] = mask
+            continue
+
+    if attr not in attr_masks:
+        logger.info(f"Could not find a modality-specific mask for {attr}; using {attr} as its own mask")
+        # default behavior is to use the attribute as its own mask but adding it anyways to be explicit
+        attr_masks[attr] = attr
+```
+
+
+```{python}
+#| label: apply_ppr
+
+ppr_results = net_propagation.net_propagate_attributes(
+    napistu_graph,
+    attributes = valid_attributes,
+    propagation_method = "personalized_pagerank",
+    additional_propagation_args = { "damping": 0.85 }
+)
+
+if os.path.isfile(PPR_NULL_TMP_PATH) and not OVERWRITE:
+    logger.info(f"Loading PPR nulls from cache at {PPR_NULL_TMP_PATH}")
+    ppr_with_nulls = pd.read_csv(PPR_NULL_TMP_PATH, sep="\t", index_col=0)
+else:
+    logger.info(f"Calibrating PPR enrichments by permuting vertex attributes among masked vertices")
+    ppr_with_nulls = net_propagation.network_propagation_with_null(
+        napistu_graph,
+        attributes = valid_attributes,
+        mask = attr_masks,
+        propagation_method = "personalized_pagerank",
+        additional_propagation_args = { "damping": 0.85 },
+        null_strategy = "vertex_permutation",
+        n_samples = N_NULL_SAMPLES,
+        verbose = True    
+    )   
+
+    logger.info(f"Saving PPR nulls to cache at {PPR_NULL_TMP_PATH}")
+    ppr_with_nulls.to_csv(PPR_NULL_TMP_PATH, sep="\t")
+```
+
+
+```{python}
+#| label: ppr_significance
+
+# name index to vertex_id
+tall_ppr_enrichments = (
+    ppr_with_nulls
+    .reset_index()
+    .rename(columns={"index": "vertex_name"})
+    .melt(id_vars=["vertex_name"], var_name="attribute", value_name="ppr_null_quantile")
+    .assign(p_value = lambda x: hypothesis_testing.quantile_to_pvalue(x["ppr_null_quantile"], "two-tailed"))
+    .assign(is_enriched = lambda x: x["ppr_null_quantile"] > 0.5)
+    # correct for 0 p-values by flooring based on the # of null samples
+    .assign(p_value = lambda x: floor_pvalue_by_resolution(x["p_value"], N_NULL_SAMPLES))
+)
+
+# combine observed and null summaries
+tall_ppr_results =  (
+    ppr_results
+    .reset_index()
+    .rename(columns={"index": "vertex_name"})
+    .melt(id_vars=["vertex_name"], var_name="attribute", value_name="ppr_score")
+    .merge(tall_ppr_enrichments, on=["vertex_name", "attribute"])
+    .dropna(subset=["p_value"])
+)
+
+fdr_controlled_results = multi_model_fitting.control_fdr(
+    tall_ppr_results,
+    grouping_vars = ["attribute", "is_enriched"],
+    require_groups = True
+)
+
+def plot_ppr_enrichment_histograms(fdr_controlled_results):
+
+    axes = fdr_controlled_results["p_value"].hist(bins = int(round(N_NULL_SAMPLES/2, 0)), by = fdr_controlled_results["is_enriched"])
+    axes[0].set_title("Depleted (False)")
+    axes[1].set_title("Enriched (True)")
+    axes[0].set_xlabel("P-value")
+    axes[0].set_ylabel("Count")
+    axes[1].set_xlabel("P-value")
+
+    plt.show()
+
+plot_ppr_enrichment_histograms(fdr_controlled_results)
+```
+
+
+```{python}
+#| label: discovery_counts
+
+n_enriched_vertices = fdr_controlled_results.query("is_enriched == True").query("q_value < 0.1").value_counts("attribute")
+
+# add back zeros
+missing_attributes = set(fdr_controlled_results["attribute"].unique()) - set(n_enriched_vertices.index.tolist())
+missing_attributes
+
+n_enriched_vertices = (
+    pd.concat([
+        n_enriched_vertices,
+        pd.Series({attr: 0 for attr in missing_attributes}).rename("count")
+    ])
+)
+
+# reformat the attributes to include modality and measure
+attr_metadata = dict()
+for key in n_enriched_vertices.index.tolist():
+    for mod in mdata.mod_names:
+        # match str
+        if re.search(mod, key):
+            attr_metadata[key] = {
+                "modality" : mod,
+                "measure" : re.sub(f"_{mod}", "", key)
+            }
+            break
+
+    if key not in attr_metadata:
+        attr_metadata[key] = {
+            "modality" : "unknowm",
+            "measure" : key
+        }
+
+attr_signif_counts = pd.concat(
+    [
+        n_enriched_vertices,
+        pd.DataFrame(attr_metadata).T
+    ],
+    axis = 1
+)
+
+fig, ax = create_stacked_barplot_seaborn(attr_signif_counts)
+```
+
+To select for interesting features, we can compare PPR scores to a suitable null distribution. The currently implemented way of doing this to compare:
+    - **pagerank_by_attribute** the personalized pagerank scores of vertices when reset probability is proportional to a vertex attribute
+    - **pagerank_unifrom** the peronsalized ragerank scores when reset probability is Unfiform over vertices with a non-zero value of the vertex attribute.
+
+This can help to address connectivity biases or if measured vertices show up in a certain region of the network. For example, we may expect metabolites to be nearby other metabolites.
+
+```{python}
+#| label: ppr_bio
+
+top_enrichments =(
+    fdr_controlled_results
+    .query("is_enriched == True")
+    .query("q_value < 0.1")
+    .sort_values(["p_value", "ppr_score"], ascending = [True, False])
+    .groupby("attribute")
+    .head(10)
+    .merge(
+        annotated_vertices[["name", "node_name", "node_type"]],
+        left_on = "vertex_name",
+        right_on = "name"
+    )
+)
+
+for k, v in top_enrichments.groupby("attribute"):
+    print(k)
+    display(napistu_utils.style_df(v.head(10)))
+```
