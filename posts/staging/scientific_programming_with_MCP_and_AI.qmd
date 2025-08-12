@@ -28,6 +28,30 @@ In this post I'll share my recent (soon to be outdated) experience extending and
 
 
 
+### The AI-Assisted Development Challenge
+
+To address this transition, I wanted to develop and utilize a codebase which satisfied several constraints:
+- Performs the key analyses supporting each problem
+- Scientifically accurate
+- Developable in little time
+
+This seems to be a classic case of the eternal software problem: you can't have all of {fast, good, and cheap}, pick two. Can genAI help us achieve all three? It's very good at fast & cheap, so can we use it to create good analyses?
+
+**Where AI Development Fails**
+
+Through this project, I encountered several failure modes of AI-assisted coding:
+
+- **Brittle**: Tries to get too fancy by building advanced features with many arguments but no testing
+- **Unmaintainable**: Writing mountains of code with little focus on refactoring, limited docstrings, and no type hints
+- **Wrong**: Most concerning, AI can make implementation decisions that are scientifically inaccurate
+
+A couple of examples I ran into during this analysis:
+- Parsing dependent variables out of a regression formula (e.g., `y ~ a + b`) and turning it into separate tests (`y ~ a` & `y ~ b`)
+- Treating p-values and q-values interchangeably where if q-values are missing, it would filter on `p-values < fdr_cutoff` to identify discoveries
+
+The scary part is that wrong details can be hidden under layers of brittle, unmaintainable code. This led me to develop the [`shackett-utils`](https://github.com/shackett/shackett-utils) package with proper testing and documentation.
+
+
 
 ## Model Context Protocol
 

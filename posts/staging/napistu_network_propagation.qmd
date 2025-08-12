@@ -15,52 +15,42 @@ jupyter: forny-2023
 engine: jupyter
 ---
 
-This is part two of a two-part series highlighting **Napistu**, a new framework for building genome-scale networks of molecular biology and biochemistry and interrogating them with high-dimensional data. The series explores how we can move beyond traditional gene set enrichment approaches to understand disease mechanisms through network-based analysis.
+This is part two of a two-part series highlighting **Napistu**, a new framework for building genome-scale networks of molecular biology and biochemistry and integrating them with high-dimensional data. Using a methylmalonic acidemia (MMA) multimodal dataset as a case study, we'll see how to identify disease-relevant molecular signals and distill them into mechanistic insights through network-based analysis.
 
-## The Challenge of Multi-Modal Disease Analysis
+## From statistical associations to biological mechanisms
 
-Modern genomics generates increasingly complex datasets - transcriptomics, proteomics, metabolomics - each capturing different aspects of biological systems. Traditional approaches analyze these data types separately, potentially missing coordinated changes that span molecular layers. Even when we successfully identify disease-associated genes or proteins, interpreting their biological significance and identifying upstream regulatory causes remains challenging.
+Modern genomics excels at generating lists of disease-associated genes and proteins through statistical analysis. Gene Set Enrichment Analysis (GSEA) and similar approaches can group these genes into functional categories, providing useful biological labels. But what we really want is to move from identifying *what* genes change to understanding *why* they belong together—the kind of mechanistic picture you'd see in Figure 1 of a Cell paper, where molecular components are connected through established biochemistry and molecular biology.
+
+This mechanistic understanding would allow us to do more than just label gene sets with pathway names. We could identify potential upstream regulators, trace causal chains from disease symptoms to their regulatory origins, and generate testable hypotheses about therapeutic intervention points. Network-based approaches offer a path toward this deeper biological interpretation by representing molecular interactions as graphs where information can flow between connected components.
+
+## Napistu's implementation
+
+Napistu makes network biology concepts practical through three core capabilities. First, its data representation faithfully captures regulatory mechanisms by representing genes, metabolites, protein complexes, and drugs as molecular species connected through regulatory interactions and biochemical transformations. Second, it provides methods for translating these pathway representations into regulatory graphs where vertices represent molecular species and edges represent direct regulatory relationships. Third, it enables users to ask sophisticated biological questions of these networks: What is the relationship between two genes? What are the direct and indirect regulators of a molecular target? And as we'll explore in this post, what shared mechanisms unite a set of disease-associated genes?
+
+Throughout this post, I'll use two types of asides to provide additional context without disrupting the main narrative. The green boxes contain biological background and systems biology "inside baseball", while the blue boxes reflect on my experience developing scientific software in the age of AI.
 
 {% include bio-section.html content="
-Gene Set Enrichment Analysis (GSEA) has been the gold standard for biological interpretation, but it's fundamentally limited by pre-defined pathway annotations. Many disease mechanisms involve novel combinations of known pathways or regulatory interactions not captured in standard databases. Network-based approaches can transcend these limitations by representing biological systems as graphs where information can flow between any connected components, revealing emergent patterns not visible in static pathway definitions.
+For biologists: You'll learn about a broadly applicable open-source framework that could be applied to your biological problems, moving beyond traditional pathway analysis limitations. We'll discover how network propagation reveals unexpected regulatory connections in MMA pathophysiology, connecting MMUT dysfunction to anaplerotic metabolites like glutamine and identifying novel signaling pathway components that weren't apparent from traditional gene set analysis. These findings validate and extend the Forny discoveries while pointing to previously unappreciated therapeutic targets.
 " %}
-
-## The Promise of Network Biology
-
-Network-based approaches offer a powerful alternative by representing biological systems as graphs where molecules (genes, proteins, metabolites) are vertices connected by regulatory relationships. This representation allows us to:
-
-- **Trace causal chains**: Follow information flow from disease symptoms to upstream regulatory causes
-- **Integrate multiple data types**: Map different molecular measurements onto the same network structure  
-- **Discover emergent patterns**: Identify coordinated programs spanning traditional pathway boundaries
-- **Generate therapeutic hypotheses**: Identify regulatory nodes that could be targeted for intervention
-
-**Napistu's Implementation**
-
-Napistu makes these network biology concepts practical through its integrated workflow: the `species_data` system handles systematic identifier mapping (Ensembl genes, UniProt proteins, etc.) and resolves many-to-one mappings to create unified representations across multi-modal datasets. Network propagation methods like personalized PageRank then trace disease signals through the network, while multiple null distribution strategies (vertex permutation, edge permutation, parametric nulls) provide rigorous statistical testing to distinguish meaningful biological patterns from connectivity artifacts.
 
 {% include ai-aside.html content="
-AI coding assistants promise huge productivity gains, but building reliable pipelines for connecting diverse biological data types often requires solving genuinely novel problems that push beyond what LLMs have encountered. The result is an interesting tension: how do you leverage AI's speed for routine coding tasks while ensuring correctness when breaking new ground? I'll demonstrate this balance with two concrete examples later in this post, showing how I used AI tools to develop new Napistu features.
+For computational folks: This post demonstrates how Napistu integrates network representations and high dimensional data through practical workflows, from multimodal identifier mapping to applying personalized PageRank with empirical null distirbutions. I'll share specific examples of using AI to develop complex scientific software where the problems we face are generally out-of-distribution for LLMs.
 " %}
 
-## Series Overview
+## Series overview
 
 **Part 1: Creating Multimodal Disease Profiles** established the foundation by systematically extracting disease-relevant molecular signatures from the Forny et al. methylmalonic acidemia dataset. Through careful batch effect correction and both supervised and unsupervised analyses, we identified coordinated programs of gene and protein expression associated with disease severity measures. This preprocessing created clean, quantitative molecular profiles ready for network integration.
 
-In this second post, we'll contextualize these statistical signals within genome-scale biological networks using Napistu. At a high-level, this involves:
-
-• **Data Integration and Mapping**: The analysis demonstrates how to integrate multi-omics datasets (transcriptomics and proteomics) from MuData/AnnData objects onto biological pathway networks by mapping systematic identifiers (like Ensembl genes and UniProt proteins) to network species, handling many-to-one mappings, and embedding the results as tables in the pathway model's species_data attribute.
-
-• **Network Attribute Assignment**: Multiple strategies are shown for transferring experimental data from species_data tables to graph vertices, including during network creation with graph attribute dictionaries and post-creation using specialized functions. The approach supports flexible data transformations (like taking absolute values or -log10 of p-values) to prepare attributes for downstream network analysis.
-
-• **Network Propagation Analysis**: The workflow applies personalized PageRank to propagate information through the biological network, using vertex attributes as reset probabilities to identify network regions enriched for experimental signals. Results are compared against vertex permutation distributions to control for connectivity biases and highlight biologically meaningful network modules that show coordinated responses to the experimental conditions.
+In this second post, we'll contextualize these statistical signals within genome-scale biological networks using Napistu. Our goal is to trace disease signals from the symptoms of dysregulation (our differentially expressed genes and proteins) upstream to their shared regulators. We'll accomplish this by first mapping our statistical results onto genes in the biological pathway model, then transferring these signals to vertices in a regulatory graph. Finally, we'll apply personalized PageRank with appropriate null distributions to identify subgraphs enriched for disease signals, revealing the upstream regulatory mechanisms driving MMA pathophysiology.
 
 To reproduce this analysis, run the first notebook in the series, then <<TO DO>>
 
 # Setup
 
 ```{r}
-reticulate::use_virtualenv("~/Desktop/GITHUB/napistu/lib/napistu-scrapyard/applications/forny_2023/.venv", required = TRUE)
-
+if (interactive()) {
+  reticulate::use_virtualenv("~/Desktop/GITHUB/napistu/lib/napistu-scrapyard/applications/forny_2023/.venv", required = TRUE)
+}
 ```
 
 ```{python}
@@ -76,6 +66,8 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
+from IPython.display import display, HTML
+
 
 from napistu.sbml_dfs_core import SBML_dfs
 from napistu import utils as napistu_utils
@@ -187,26 +179,6 @@ for phenotype in PPR_LINEAR_PHENOTYPES:
 for phenotype in PPR_SMOOTH_PHENOTYPES:
     VAR_VARS.append(f"q_{phenotype}")
 
-
-def hard_thresholded_nlog10(x):
-    if x == 0:
-        return 10
-    elif x < FDR_CUTOFF: # fdr cutoff
-        return -np.log10(x)
-    else:
-        return 1e-10
-
-CUSTOM_TRANSFORMATIONS = {
-    # take the absolute value
-    "abs" : lambda x: abs(x),
-    "negate" : lambda x: -x,
-    # -log10[pvalue]
-    "nlog10" : lambda x: -np.log10(x),
-    # threshold based on loose FDR threshold and then transform   
-    "hard_thresholded_nlog10" : hard_thresholded_nlog10,
-    "square" : lambda x: x**2
-}
-
 # defining variables to add as vertex attributes and how to transform them so
 # they are appropriate for personalized pagerank reset probability
 ATTRIBUTES_TO_GRAPH_SPEC = [
@@ -247,6 +219,25 @@ ATTRIBUTES_TO_GRAPH_SPEC = ATTRIBUTES_TO_GRAPH_SPEC + [{
 REGEXES_TO_MASKS = { x: FORNY_DEFS.INDICATOR_STR.format(modality = x) for x in MODALITIES }
 
 # utility functions
+
+def hard_thresholded_nlog10(x):
+    if x == 0:
+        return 10
+    elif x < FDR_CUTOFF: # fdr cutoff
+        return -np.log10(x)
+    else:
+        return 1e-10
+      
+CUSTOM_TRANSFORMATIONS = {
+    # take the absolute value
+    "abs" : lambda x: abs(x),
+    "negate" : lambda x: -x,
+    # -log10[pvalue]
+    "nlog10" : lambda x: -np.log10(x),
+    # threshold based on loose FDR threshold and then transform   
+    "hard_thresholded_nlog10" : hard_thresholded_nlog10,
+    "square" : lambda x: x**2
+}
 
 def floor_pvalue_by_resolution(p_value, n_samples):
     """
@@ -290,6 +281,17 @@ def create_stacked_barplot_seaborn(df):
     
     return fig, ax
 
+def plot_ppr_enrichment_histograms(fdr_controlled_results):
+
+    axes = fdr_controlled_results["p_value"].hist(bins = int(round(N_NULL_SAMPLES/2, 0)), by = fdr_controlled_results["is_enriched"])
+    axes[0].set_title("Depleted (False)")
+    axes[0].set_xlabel("P-value")
+    axes[0].set_ylabel("Count")
+    axes[1].set_title("Enriched (True)")
+    axes[1].set_xlabel("P-value")
+
+    plt.show()
+
 # constants affecting behavior
 FDR_CUTOFF = 0.1 # just used for hard thresholding in this analysis
 N_NULL_SAMPLES = 100
@@ -317,8 +319,21 @@ for modality in MODALITIES:
     ADATA_LEVEL_VARS[modality] = [indicator_var]
 ```
 
-## Loading Napistu networks
+## Loading Napistu data
 
+To make Napistu easy to use, I've added a light-weight test pathway (3 metabolic pathways merged) and a human consensus pathway to Google Cloud Storage (GCS). These pathway representations revolve around two key objects:
+
+- [SBML_dfs](https://github.com/napistu/napistu/wiki/SBML-DFs) which organizes molecular species (genes, metabolites, complexes, drugs) and their relationships (reactions, interactions) as a relational database.
+- [NapisuGraph](https://github.com/napistu/napistu/wiki/Napistu-Graphs) which translate the molecular species and reactions into an (un)directed graph.
+
+The human consensus `SBML_dfs` and `NapistuGraph` we'll be using was created using the Napistu Python CLI (see [build pipeline](https://github.com/napistu/napistu/blob/main/dev/create_human_consensus.qmd)) which can be used to build and refine genome-scale pathway representations for most model organisms. Here
+
+
+<<TO DO pathway sources>>>
+
+{% include ai-aside.html content=" 
+I made choices in terms of creating these pathway both in terms of sources to include, and how to represent them (e.g., do we merge cognate genes, transcripts, and proteins? should we merge compartments? should we drop cofactors?). More choices went into how to translate the `SBML_dfs` into a graph (e.g., how to weight and deduplicate edges). Many of these decisions are opinionated but easily defensible (like we remove cofactors because otherwise "water" would be treated the largest regulatory hub (true perhaps, but not particularly actionable)), others are clearly heuristic (like what should the relative weight be between an enzyme modifying its substrate and a high confidence protein-protein interaction). In the future, I believe that this framework could be particularly impactful if we could expose information with fewer assumptions baked in. The core data of an `SBML_dfs` object could be organized as MCP endpoints to serve as inductive priors for AI cell models. While, source-specific support for interactions could be comprehensively added to graph's edges and combined with graph neural networks to link regulators and their targets.
+" %}
 
 ```{python}
 #| label: napistu_setup
@@ -403,8 +418,8 @@ mofa_lfs = prepare_mudata_results_df(
 )
 
 for modality in MODALITIES:
-    print(f"Extracted latent factors for {modality})
-    display(mofa_lfs[modality].head(5))
+    display(HTML(f"<h4>Extracted latent factors for {modality}</h4>"))
+    display(napistu_utils.style_df(mofa_lfs[modality].head(5)).to_html())
 ```
 
 To add these results to an `SBML_dfs` object involves creating a `species_data` pd.DataFrame with 0-1 rows for each distinct molecular species in the model. The molecular species themselves are associated with various genic and molecular ontologies (`ensembl`, `uniprot`, `entrez`, `uniprot`, among others). Napistu supports distinguishing genes, transcripts, and proteins as distinct molecular species (`dogmatic` mode) but the model we loaded above ignores this distinction and genes, transcripts, and proteins are merged into a single molecular species. 
@@ -446,8 +461,6 @@ diffex_results = prepare_mudata_results_df(
     results_attrs=VAR_VARS,
     level = "adata"
 )
-
-display(napistu_utils.style_df(diffex_results.head(5)))
 
 mount.bind_dict_of_wide_results(
     sbml_dfs,
@@ -498,7 +511,7 @@ napistu_graph_path  = downloads.load_public_napistu_asset(
 napistu_graph = napistu_utils.load_pickle(napistu_graph_path)
 ```
 
-But, to apply personalized pagerank on a directed graph we actually want to flip the edges in the graphs so information flows from targets to regulators. So, we'll create an appropriate graph on-the-fly and we'll also add edge weights to it and pass some attributes from species_data to vertices.
+But, to apply Personalized PageRank on a directed graph we actually want to flip the edges in the graphs so information flows from targets to regulators. So, we'll create an appropriate graph on-the-fly and we'll also add edge weights to it and pass some attributes from species_data to vertices.
 
 
 ```{python}
@@ -524,26 +537,14 @@ napistu_graph.vs[0].attributes()
 
 ## Network Propagation
 
-Here we'll implement a workflow for applying personalized pagerank (PPR) to a napistu_graph's vertex attributes.
+Here we'll implement a workflow for applying Personalized PageRank (PPR) to a napistu_graph's vertex attributes. The PageRank algorithm conceptually involves adding a signal to a random vertex, then having the signal flow to a child node (w/ probability $\alpha$) or resetting to another random vertex (w/ probability $1-\alpha$). Personalized pagerank involves "personalizing" this process by resetting the algorithm to vertices based on vertices `reset probability` (a probability mass function defined over all vertices). Repeating this random walk with reset many times results in the signal having visited hub vertices many times. The actual PageRank algorithm finds the stationary distribution of this process using some slick linear algebra - power iteration to find the stationary distribution and sparse matrix storage and operations. 
 
-To reason with PPR scores we will pull together a few pieces of information:
+This lovely [blog post](https://www.r-bloggers.com/2014/04/from-random-walks-to-personalized-pagerank/) by Stefan Weigert provides a more thorough overview of PPR. Fore xample, here is Stefan's visualization of a random walk following the PPR process which really nails the intuition for me:
 
-- the actual PPR score derived from applying network propagation to attributes of interest. High values here may be interesting but they also bake in two types of biases.
-    - topological bias: certain regions of the network are more highly connect and the in- and out-degree of vertices and the local connectivity of the network in general can cause arbitrary signals to pool in particular regions of the network. This is a broadly appreciated problem in network analysis. To combat this bias we can compare individual vertices to null distributions constructed by randomizing the network. Several types of null distributions are included in Napistu - those which are most relevant for addressing topological biases are the non-parameteric `vertex_permutation` or the `parametric_null`.
-    - ascertainment bias: we are only measuring a subset of vertices in the network and this will also naturally pool signal in particular regions of the network. For example, if we were to apply network propagation to the results from a metabolomics experiment the signals would naturally be concentrated in central carbon metabolism. To address this we want to constrain our null randomization to only permutate/resample signals from vertices which are actually defined for the attribute. In the case of metabolomics this would mean shuffling metabolite-level summaries and reapplying network propagation to assess whether the signal converged on subnetworks more robustless in observed vs null statistics.
-- the quantile of each observed score (for a single vertex * attribute combination) compared to a null distribution for this vertex constructed by applying `N_NULL_SAMPLE` instances of `vertex_permutation` constrained by a suitable vertex mask abrogating ascertainment bias.
-- p-values for observed scores compared to null quantiles. Generally we are interested in right-tailed p-values because we are interested in subgraphs which are enriched for attribute-level signals rather than those that are depleted for signal (the left tail). The issue here is that strong biological signals will indeed enriched signals in a subset of vertices but they will also naturally deplete signals in other regions of network space. To account for this fact we can do a few things:
-    1. calculate two-tailed p-values based on the null quantiles which bake in both significant enrichments and depletions.
-    2. flag vertices which are in the left (depleted) and right (enriched) tail so that we can filter to vertices which are statistically significantly enriched
-    3. apply FDR control separately on the depleted and enriched p-values. The depletion signals are actually STRONGER than the enrichments (lower pi0) so applying FDR control to all p-values would be anti-conservative q-values for enriched signals.
-- q-values stratified by attribute and positive vs negative enrichments. Currently this uses BH since all of the Python implementaitons of q-value (Storey & Tibshirani) that I've tried are flawed.
+![Personalized pagerank animation](https://redirect.viglink.com/?format=go&jsonp=vglnk_175467987420910&key=949efb41171ac6ec1bf7f206d57e90b8&libId=me371o8001021u9s000UAbikftpu4&loc=https%3A%2F%2Fwww.r-bloggers.com%2F2014%2F04%2Ffrom-random-walks-to-personalized-pagerank%2F&v=1&out=https%3A%2F%2Fi2.wp.com%2F1.bp.blogspot.com%2F-5DGkqiLF87U%2FUzqm0Vah16I%2FAAAAAAAABIE%2FaPgVRreUvts%2Fs1600%2Fg4.gif&ref=https%3A%2F%2Fwww.google.com%2F&title=From%20Random%20Walks%20to%20Personalized%20PageRank%20%7C%20R-bloggers&txt=).
 
-We'll export a table with each (vertex x attribute) and its PPR score, p-value, whether its enriched or depleted and its q-value to provide flexibility in downstream uses. 
+We've set ourselves up for applying PPR above because we have a set of attributes that can each be treated as a reset probability distribution (following L1 normalization). This involved some ad hoc transformations (e.g., converting from log10 p-values to -log10 p-values; or taking the square of effect sizes) which were sensible but ideally we could learn relevant transformations rather than assuming them *a priori*.
 
-Generally, we'll filter to:
-- an attribute of interest
-- vertices less than an FDR cutoff (significant)
-- vertices enriched for signals 
 
 ```{python}
 #| label: select_ppr_attributes
@@ -561,6 +562,37 @@ logger.info(f"Valid attributes: {valid_attributes}")
 assert [x in valid_attributes for x in REGEXES_TO_MASKS.values()]
 valid_attributes = list(set(valid_attributes) - set(REGEXES_TO_MASKS.values()))
 
+ppr_results = net_propagation.net_propagate_attributes(
+    napistu_graph,
+    attributes = valid_attributes,
+    propagation_method = "personalized_pagerank",
+    additional_propagation_args = { "damping": 0.85 }
+)
+```
+
+
+To apply PPR to the data attributes we've 
+
+To reason with PPR scores we will pull together a few pieces of information:
+
+- the actual PPR score derived from applying network propagation to attributes of interest. High values here may be interesting but they also bake in two types of biases.
+    - topological bias: certain regions of the network are more highly connect and the in- and out-degree of vertices and the local connectivity of the network in general can cause arbitrary signals to pool in particular regions of the network. This is a broadly appreciated problem in network analysis. To combat this bias we can compare individual vertices to null distributions constructed by randomizing the network. Several types of null distributions are included in Napistu - those which are most relevant for addressing topological biases are the non-parameteric `vertex_permutation` or the `parametric_null`.
+    - ascertainment bias: we are only measuring a subset of vertices in the network and this will also naturally pool signal in particular regions of the network. For example, if we were to apply network propagation to the results from a metabolomics experiment the signals would naturally be concentrated in central carbon metabolism. To address this we want to constrain our null randomization to only permutate/resample signals from vertices which are actually defined for the attribute. In the case of metabolomics this would mean shuffling metabolite-level summaries and reapplying network propagation to assess whether the signal converged on subnetworks more robustless in observed vs null statistics.
+- the quantile of each observed score (for a single vertex * attribute combination) compared to a null distribution for this vertex constructed by applying `N_NULL_SAMPLE` instances of `vertex_permutation` constrained by a suitable vertex mask abrogating ascertainment bias.
+- p-values for observed scores compared to null quantiles. Generally we are interested in right-tailed p-values because we are interested in subgraphs which are enriched for attribute-level signals rather than those that are depleted for signal (the left tail). The issue here is that strong biological signals will indeed enriched signals in a subset of vertices but they will also naturally deplete signals in other regions of network space. To account for this fact we can do a few things:
+    1. calculate two-tailed p-values based on the null quantiles which bake in both significant enrichments and depletions.
+    2. flag vertices which are in the left (depleted) and right (enriched) tail so that we can filter to vertices which are statistically significantly enriched
+    3. apply FDR control separately on the depleted and enriched p-values. The depletion signals are actually STRONGER than the enrichments (lower pi0) so applying FDR control to all p-values would be anti-conservative q-values for enriched signals.
+- q-values stratified by attribute and positive vs negative enrichments. Currently this uses BH since all of the Python implementaitons of q-value (Storey & Tibshirani) that I've tried are flawed.
+
+We'll export a table with each (vertex x attribute), its PPR score, its p-value (the observed quantile among the values of an empirical null distribution), whether its enriched or depleted and its q-value to provide flexibility in downstream uses. 
+Generally, we'll filter to:
+- an attribute of interest
+- vertices enriched for signals
+
+```{python}
+#| label: ppr_null_distribution
+
 attr_masks = dict()
 for attr in valid_attributes:
     for regex, mask in REGEXES_TO_MASKS.items():
@@ -572,19 +604,7 @@ for attr in valid_attributes:
         logger.info(f"Could not find a modality-specific mask for {attr}; using {attr} as its own mask")
         # default behavior is to use the attribute as its own mask but adding it anyways to be explicit
         attr_masks[attr] = attr
-```
-
-
-```{python}
-#| label: apply_ppr
-
-ppr_results = net_propagation.net_propagate_attributes(
-    napistu_graph,
-    attributes = valid_attributes,
-    propagation_method = "personalized_pagerank",
-    additional_propagation_args = { "damping": 0.85 }
-)
-
+        
 if os.path.isfile(PPR_NULL_TMP_PATH) and not OVERWRITE:
     logger.info(f"Loading PPR nulls from cache at {PPR_NULL_TMP_PATH}")
     ppr_with_nulls = pd.read_csv(PPR_NULL_TMP_PATH, sep="\t", index_col=0)
@@ -637,17 +657,6 @@ fdr_controlled_results = multi_model_fitting.control_fdr(
     require_groups = True
 )
 
-def plot_ppr_enrichment_histograms(fdr_controlled_results):
-
-    axes = fdr_controlled_results["p_value"].hist(bins = int(round(N_NULL_SAMPLES/2, 0)), by = fdr_controlled_results["is_enriched"])
-    axes[0].set_title("Depleted (False)")
-    axes[1].set_title("Enriched (True)")
-    axes[0].set_xlabel("P-value")
-    axes[0].set_ylabel("Count")
-    axes[1].set_xlabel("P-value")
-
-    plt.show()
-
 plot_ppr_enrichment_histograms(fdr_controlled_results)
 ```
 
@@ -671,7 +680,7 @@ n_enriched_vertices = (
 # reformat the attributes to include modality and measure
 attr_metadata = dict()
 for key in n_enriched_vertices.index.tolist():
-    for mod in mdata.mod_names:
+    for mod in MODALITIES:
         # match str
         if re.search(mod, key):
             attr_metadata[key] = {
@@ -682,7 +691,7 @@ for key in n_enriched_vertices.index.tolist():
 
     if key not in attr_metadata:
         attr_metadata[key] = {
-            "modality" : "unknowm",
+            "modality" : "unknown",
             "measure" : key
         }
 
@@ -721,6 +730,6 @@ top_enrichments =(
 )
 
 for k, v in top_enrichments.groupby("attribute"):
-    print(k)
+    display(HTML(f"<h4>Top associations for {k}</h4>"))
     display(napistu_utils.style_df(v.head(10)))
 ```
