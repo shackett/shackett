@@ -1,5 +1,5 @@
 ---
-title: "Creating Multimodal Disease Profiles"
+title: "Network Biology with Napistu, Part 1: Creating Multimodal Disease Profiles"
 author: "Shackett"
 format:
   html:
@@ -15,9 +15,9 @@ jupyter: forny-2023
 engine: jupyter
 ---
 
-This is part one of a two-part post highlighting *Napistu*; a new framework for building genome-scale networks of molecular biology and biochemistry. In this post, we'll tackle a fundamental challenge in computational biology: how do we extract meaningful disease signatures from complex multi-modal datasets and connect them to underlying biological mechanisms?
+This is part one of a two-part post highlighting **[Napistu](https://github.com/napistu/napistu)**; a new framework for building genome-scale networks of molecular biology and biochemistry. In this post, we'll tackle a fundamental challenge in computational biology: how do we extract meaningful disease signatures from complex multimodal datasets and connect them to underlying biological mechanisms?
 
-Using methylmalonic acidemia (MMA) as our test case, we'll demonstrate how to systematically extract disease signatures from multi-modal data. Our approach combines three complementary analytical strategies: exploratory data analysis to understand data structure and quality, differential expression analysis to identify individual disease-associated features, and factor analysis to discover coordinated programs across data types. The end goal is to distill thousands of molecular measurements into a handful of interpretable disease signatures—each capturing a distinct aspect of disease biology that we can then connect to regulatory networks.
+Using methylmalonic acidemia (MMA) as our test case, we'll demonstrate how to systematically extract disease signatures from multimodal data. Our approach combines three complementary analytical strategies: exploratory data analysis to understand data structure and quality, differential expression analysis to identify individual disease-associated features, and factor analysis to discover coordinated programs across data types. The end goal is to distill thousands of molecular measurements into a handful of interpretable disease signatures—each capturing a distinct aspect of disease biology that we can then connect to regulatory networks.
 
 Throughout this post, I'll use two types of asides to provide additional context without disrupting the main analytical flow. The green boxes contain biological background for readers less familiar with metabolic disease mechanisms, while the blue boxes reflect on the computational workflow and AI-assisted development process.
 
@@ -68,7 +68,7 @@ To create interpretable disease signatures from the Forny dataset, we'll follow 
 
 I would usually tackle problems like this in R, but since Napistu is a Python framework, I'll implement this analysis in Python. This transition provided an opportunity to explore AI-assisted development—not as a replacement for careful software engineering, but as a collaborator for efficiently writing and testing code. I'll highlight specific examples of where this approach succeeded and failed as they come up in the analysis.
 
-# Creating Molecular Profiles of MMA
+# Creating molecular profiles of MMA
 
 ## Environment setup
 
@@ -77,34 +77,33 @@ If you'd like to reproduce this analysis, follow these steps:
 1. Install [uv](https://docs.astral.sh/uv/#highlights) (or just use `pip` install)
 2. Setup a Python environment:
 
-```bash
-uv venv --python 3.11
-source .venv/bin/activate
+    ```bash
+    uv venv --python 3.11
+    source .venv/bin/activate
+    
+    # Core dependencies
+    uv pip install napistu'[scverse]'
+    # Personal utilities package with genomics analysis functions
+    uv pip install "git+https://github.com/shackett/shackett-utils.git[all]" 
+    # Additional dependencies
+    uv pip install openpyxl scikit-learn mofapy2 ipykernel
+    python -m ipykernel install --user --name=forny-2023
+    ```
 
-# Core dependencies
-uv pip install napistu'[scverse]'
-# Personal utilities package with genomics analysis functions
-uv pip install "git+https://github.com/shackett/shackett-utils.git[all]" 
-# Additional dependencies
-uv pip install openpyxl scikit-learn mofapy2 ipykernel
-python -m ipykernel install --user --name=forny-2023
-```
-
-3. Download the `Source Data Fig.1` from [Forny et al., 2023](https://www.nature.com/articles/s42255-022-00720-8#Sec39)
-4. Modify the following code block so `SUPPLEMENTAL_DATA_DIR` points to the directory containing the download from step 3 (`42255_2022_720_MOESM3_ESM.xlsx`)
-5. Set `CACHE_DIR` in the following code block to a location where intermediate results can be saved
-
-```{r}
-#| label: setenv_interactive
-#| echo: false
-
-if (interactive()) {
-  reticulate::use_virtualenv("~/Desktop/GITHUB/napistu/lib/napistu-scrapyard/applications/forny_2023/.venv", required = TRUE)
-}
-```
+3. Download `Source Data Fig.1` and `Source Data Fig.2` from [Forny et al., 2023](https://www.nature.com/articles/s42255-022-00720-8#Sec39)
+4. Set the paths in the following code block:
+    a. `SUPPLEMENTAL_DATA_DIR` should point to the directory containing the download from step 3 ("42255_2022_720_MOESM3_ESM.xlsx" and "42255_2022_720_MOESM4_ESM.xlsx")
+    b. `CACHE_DIR` should point to a location where intermediate results and outputs can be saved
+5. Run the notebook and render an html output:
+    
+    ```bash
+    quarto render creating_multimodal_profiles.qmd
+    ```
+First off, we'll load Python modules, configure paths, set global parameters, and define utility functions.
 
 ```{python}
 #| label: env_setup
+#| output: false
 
 import os
 import textwrap
@@ -192,7 +191,6 @@ FACTOR_REGRESSION_STR = "mofa_regression_{}"
 REGRESSION_FORMULAS = {
     "transcriptomics" : {
         "case" : "~ case + s(date_freezing)",
-        "gender" : "~ gender + s(date_freezing)",
         "OHCblPlus" : "~ OHCblPlus + s(date_freezing)",
         "MMA_urine" : "~ MMA_urine + s(date_freezing)",
         "responsive_to_acute_treatment" : "~ responsive_to_acute_treatment + s(date_freezing)",
@@ -201,7 +199,6 @@ REGRESSION_FORMULAS = {
     },
     "proteomics" : {
         "case" : "~ case + s(proteomics_runorder) + s(date_freezing)",
-        "gender" : "~ gender + s(proteomics_runorder) + s(date_freezing)",
         "OHCblPlus" : "~ OHCblPlus + s(proteomics_runorder) + s(date_freezing)",
         "MMA_urine" : "~ MMA_urine + s(proteomics_runorder) + s(date_freezing)",
         "responsive_to_acute_treatment" : "~ responsive_to_acute_treatment + s(proteomics_runorder) + s(date_freezing)",
@@ -212,7 +209,7 @@ REGRESSION_FORMULAS = {
 
 # utility functions
 
-def create_stacked_barplot_from_regression(regression_results_df, q_threshold=0.1):
+def create_stacked_barplot_from_regression(regression_results_df, q_threshold=FDR_CUTOFF):
     """
     Create a stacked barplot showing significant results by modality and model_name
     
@@ -280,7 +277,7 @@ def create_stacked_barplot_from_regression(regression_results_df, q_threshold=0.
     for i, (model_name, total_count) in enumerate(total_counts.items()):
         if total_count > 0:  # Only show label if there are any significant results
             ax.text(i, total_count + max(total_counts) * 0.01, str(int(total_count)), 
-                   ha='center', va='bottom', fontweight='bold', fontsize=10)
+            ha='center', va='bottom', fontweight='bold', fontsize=10)
     
     # Rotate x-axis labels for better readability
     plt.xticks(rotation=45, ha='right')
@@ -314,6 +311,12 @@ supplemental_data_path = {
 }
 
 assert all([os.path.isfile(x["path"]) for x in supplemental_data_path.values()])
+```
+
+Next, we will load the transcriptomics and proteomics datasets (separate sheets in the same excel doc) and the phenotypic data.
+
+```{python}
+#| label: load_data
 
 supplemental_data = {
     x : pd.read_excel(y["path"], sheet_name = y["sheet"]) for x, y in supplemental_data_path.items()
@@ -321,19 +324,19 @@ supplemental_data = {
 
 # formatting
 supplemental_data["transcriptomics"] = (
-  supplemental_data["transcriptomics"]
-  .rename({"Unnamed: 0" : "ensembl_gene"}, axis = 1)
-  .set_index("ensembl_gene")
+    supplemental_data["transcriptomics"]
+    .rename({"Unnamed: 0" : "ensembl_gene"}, axis = 1)
+    .set_index("ensembl_gene")
 )
 supplemental_data["proteomics"] = (
-  supplemental_data["proteomics"]
-  .rename({"PG.ProteinAccessions" : "uniprot"}, axis = 1)
-  .set_index("uniprot")
+    supplemental_data["proteomics"]
+    .rename({"PG.ProteinAccessions" : "uniprot"}, axis = 1)
+    .set_index("uniprot")
 )
 supplemental_data["phenotypes"] = (
-  supplemental_data["phenotypes"]
-  .rename({"Unnamed: 0" : "patient_id"}, axis = 1)
-  .set_index("patient_id")
+    supplemental_data["phenotypes"]
+    .rename({"Unnamed: 0" : "patient_id"}, axis = 1)
+    .set_index("patient_id")
 )
 ```
 
@@ -347,7 +350,7 @@ The Forny et al. dataset contains three key components:
 
 Key analytical challenges include severe class imbalance (only 20 controls vs 210 cases), missing phenotype data for many clinical measurements, potential technical variation from sample processing, and disease heterogeneity with varying genetic subtypes and severity levels.
 
-## Formatting phenotypes and technical covariates
+### Formatting phenotypes and technical covariates
 
 Clinical data presents unique challenges that require careful preprocessing. Clinical measurements are often right-skewed and contain missing values since only a subset of tests are ordered for individual patients. Since we're interested in quantitative biomarkers, it's helpful to have these measurements for all patients to improve statistical power. We can apply imputation, but it's beneficial to first transform variables so they more closely follow a multivariate Gaussian distribution, which also improves regression modeling by linearizing relationships between dependent and independent variables.
 
@@ -574,11 +577,11 @@ This vignette is a nice encapsulation of my experience doing science with AI. It
 #| label: pvalue_histograms
 
 # plot p-value histograms
-TERMS_FOR_PVALUE_HISTOGRAM = ["case", "gender", "MMA_urine", "OHCblPlus", "date_freezing"]
+TERMS_FOR_PVALUE_HISTOGRAM = ["case", "MMA_urine", "OHCblPlus", "date_freezing"]
 stats_viz.plot_pvalue_histograms(
     regression_results_df.query("term in @TERMS_FOR_PVALUE_HISTOGRAM"),
     term_column = "term",
-    fdr_cutoff = 0.1
+    fdr_cutoff = FDR_CUTOFF
 )
 plt.show()
 ```
@@ -587,7 +590,7 @@ P-value distributions provide powerful diagnostics for our regression models. We
 
 Our results show varying levels of biological signal across different phenotypes, with `MMA_urine` and `OHCblPlus` showing clear evidence of biological associations, while `case` status shows little signal after covariate adjustment.
 
-### Validating results: Focus on MMUT
+### Validating results: focus on MMUT
 
 Before plowing forward, it's good to verify that our modeling is capturing real biology by spot-checking some gold-standard associations. Let's examine the top associations and verify they make biological sense by focusing on MMUT, the primary gene involved in MMA pathogenesis.
 
@@ -644,12 +647,13 @@ This disconnect between transcript levels and metabolic outcomes could be key to
 
 Unsupervised analyses help us identify patterns in the data with minimal assumptions about what should be important. Factor analysis is particularly intuitive for genomics data because it describes cellular states through gene expression programs—coordinated changes in related genes that reflect underlying biological processes.
 
-Multi-Omic Factor Analysis (MOFA) extends this concept to multi-modal data by discovering the principal sources of variation across different data types. Rather than concatenating features and treating transcripts and proteins equivalently, MOFA can disentangle axes of heterogeneity that are shared across multiple modalities from those specific to individual data modalities. This allows us to identify whether certain biological programs create coordinated responses across transcriptomics and proteomics, or whether they manifest differently in each data type.
+Multi-Omic Factor Analysis (MOFA) extends this concept to multimodal data by discovering the principal sources of variation across different data types. Rather than concatenating features and treating transcripts and proteins equivalently, MOFA can disentangle axes of heterogeneity that are shared across multiple modalities from those specific to individual data modalities. This allows us to identify whether certain biological programs create coordinated responses across transcriptomics and proteomics, or whether they manifest differently in each data type.
 
 Each factor represents a biological or technical program with two key components: loadings (which features participate in the program) and usages (how much each sample expresses this program). MOFA requires selecting the optimal number of factors—too few factors miss important biological programs while too many create noise and overfitting. We systematically test different numbers of factors and select based on variance explained and factor interpretability.
 
 ```{python}
 #| label: mofa_factor_scan
+#| output: false
 
 # update the MuData object so `nvars and `nobs` are appropriate`
 intersected_mdata = md.MuData({k: v for k, v in mdata.mod.items()})
@@ -678,7 +682,7 @@ The factor scan results help us identify the optimal model complexity. We're loo
 Claude did well at organizing the hyperparameter scan and implementing various approaches for selecting the optimal number of factors (K). While I wasn't particularly impressed with the specific model selection criteria it chose, this didn't matter much in practice. Factor analyses like MOFA exhibit diminishing returns, whereby later factors tend to have smaller, sparser loadings and capture less meaningful variation. This means the overall results are relatively robust to the exact choice of K, as long as it's in a reasonable range.
 " %}
 
-With 30 factors selected as optimal, we fit the final MOFA model and examine the factor characteristics:
+With 30 factors selected as optimal, we can fit the final MOFA model and examine the factors' distributions:
 
 ```{python}
 #| label: optimal_mofa_summary
@@ -716,7 +720,7 @@ With 30 factors extracted, we need to identify which ones capture disease biolog
 ```{python}
 # Apply regression per factor
 factor_regressions = list()
-for formula_name, formula in REGRESSION_FORMULAS["transcriptomics"].items():
+for formula_name, formula in REGRESSION_FORMULAS["proteomics"].items():
 
     # Run regression analysis
     regression_results = mdata_factor_analysis.regress_factors_with_formula(
@@ -732,7 +736,7 @@ for formula_name, formula in REGRESSION_FORMULAS["transcriptomics"].items():
     summary_table = mdata_factor_analysis.summarize_factor_regression(
         regression_results,
         # loosen the FDR cutoff here, around MMA-relevant gene expression programs
-        alpha=0.1,
+        alpha=FDR_CUTOFF,
         group_by_factor=False
     ).query(f"term == '{formula_name}'")
 
@@ -745,22 +749,24 @@ factor_regressions_df = pd.concat(factor_regressions)
 optimal_model.uns["factor_regressions"] = factor_regressions_df
 ```
 
-While I like this approach in general and have seen it successfully applied to scRNA-seq data using [cNMF](https://github.com/dylkot/cNMF), it didn't work particularly well for this dataset. Most disease phenotypes show only weak correlations with factor usages. The clearest exception is urine MMA levels, which are strongly associated with latent factor 3. However, LF3 is also associated with proteomics run order and sample freezing date—not because these are confounded in our analysis (we control for batch effects when testing the MMA association), but because they likely affect overlapping gene sets. This highlights both a key strength and limitation of factor analysis: it's agnostic to the biology you're interested in and instead captures the dominant sources of variation in your data. In human disease datasets, coherent disease signatures are often distributed across many small factors rather than concentrated in a few large ones, making them harder to detect against the backdrop of technical variation and biological heterogeneity. Rather than tweaking parameters to force better results, it's more scientifically mature to implement technically sound analyses and accept what the data actually shows.
+While I like this approach in general and have seen it successfully applied to single-cell RNAseq data using [cNMF](https://github.com/dylkot/cNMF), it didn't work particularly well for this dataset. Most disease phenotypes show only weak correlations with factor usages (similar to the feature-wise significance tests). The clearest exception is urine MMA levels, which are strongly associated with latent factor 3. However, LF3 is bimodal and also associated with proteomics run order and sample freezing date so buyer beware. The heavy focus on the gene programs associated with freezing date highlights both a key strength and limitation of factor analysis: it's agnostic to the biology you're interested in and instead captures the dominant sources of variation in your data. In human disease datasets, coherent disease signatures are often distributed across many small factors rather than concentrated in a few large ones, making them harder to detect against the backdrop of technical variation and biological heterogeneity.
 
 ## Summary and next steps
 
-This analysis demonstrates a systematic approach to extracting disease-relevant molecular profiles from multi-modal genomics data. Using the Forny et al. MMA dataset, we've shown how careful data processing, covariate adjustment, and both supervised and unsupervised methods can reveal subtle but biologically meaningful disease signals.
+This analysis demonstrates a systematic approach to extracting disease-relevant molecular profiles from multimodal genomics data. Using the Forny et al. MMA dataset, we've shown how careful data processing, covariate adjustment, and both supervised and unsupervised methods can reveal subtle but biologically meaningful disease signals.
 
-**Key methodological insights:**
-- **Batch effect identification**: Discovery of unreported technical variation from sample freezing dates that improved statistical power for detecting disease associations
-- **Biomarker performance**: Demonstration that urine MMA shows stronger statistical associations with molecular features than traditional enzyme activity measures
-- **Factor analysis limitations**: While MOFA revealed coordinated programs, disease signals were often distributed across many factors rather than concentrated in a few, highlighting the molecular heterogeneity of MMA
+Methodological insights:
 
-**Biological discoveries:**
-- **MMUT regulatory patterns**: Different association patterns between transcript and protein levels suggest translational/post-translational control mechanisms shape metabolic impact
-- **Disease heterogeneity**: Weak PCA associations mirror the clinical heterogeneity observed in MMA patients, suggesting complex underlying biology
-- **Statistical validation**: P-value diagnostics confirmed successful control of batch effects while preserving biological signals
+- **scverse integration**: Demonstrated how organizing multimodal data using AnnData/MuData containers facilitates reproducible analysis and seamless integration with the broader genomics ecosystem
+- **Modality-specific covariate modeling**: PCA revealed that batch effects (proteomics run order, sample freezing dates) affected transcriptomics and proteomics data differently, enabling tailored regression models for each modality that improved statistical power for detecting biological signals.
+- **AI-assisted development workflow**: LLMs proved effective for rapid prototyping and handling complex visualization syntax (like matplotlib), but encountered serious issues with statistical implementation — initially producing spaghetti code that silently converted multiple regressions into simple regressions. The solution was treating AI as a development collaborator following software engineering best practices: implementing specific features with tests in a structured Python package rather than relying on AI for end-to-end development.
 
-**Transition to network analysis:**
+Biological insights:
+
+- **MMUT regulatory patterns**: Different association patterns between transcript and protein levels suggest translational/post-translational control mechanisms shape metabolic impact, potentially explaining idiopathic MMA cases
+- **Biomarker performance**: Urine MMA showed stronger statistical associations with molecular features than traditional enzyme activity measures, suggesting it captures integrated disease pathophysiology beyond simple enzyme deficiency
+- **Disease heterogeneity**: Weak PCA associations with disease status mirror the clinical heterogeneity observed in MMA patients, confirming that molecular signatures reflect the complex, variable nature of disease presentation
+
+### Transitioning to network analysis
 
 While our statistical approach successfully identified disease-associated molecular programs, interpreting their biological significance requires additional context. These molecular signatures represent starting points for deeper mechanistic investigation. In part two, we'll map these statistical associations onto genome-scale biological networks using Napistu to trace disease signals from downstream molecular effects to potential upstream regulatory causes, converting statistical associations into testable biological hypotheses.
