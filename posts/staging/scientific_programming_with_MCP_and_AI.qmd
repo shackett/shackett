@@ -1,0 +1,66 @@
+---
+title: "Scientific Programming with MCP and AI"
+author: "Shackett"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+format:
+  html:
+    embed-resources: true
+    code-fold: true
+    code-summary: "Show the code"
+    toc: true
+    theme: minty
+    highlight: tango
+    code-block-bg: true
+    code-block-border-left: "#5BB867"
+---
+
+In this post I'll share my recent (soon to be outdated) experience extending and maintaining a scientific codebase, [Napistu](https://github.com/napistu/napistu) using modern agentic frameworks code development (Cursor & Claude). 
+
+🚀 These approaches are amazing! They can massively increase productivity by efficiently tackling routine tasks, lowering the activation energy for skill development and simplifying debugging. These contributions not only save devs time, they also preserve our mental energy for critical tasks - I love just throwing a set of pytest failures at an agent and saying "you deal with it". 
+
+⚠️ But, this hands-off, vibe coding, mentality can easily get you into trouble. Its easy for AI agents to not follow common design patterns, to duplicate code, to over-engineer irrelevant features, and to produce straight-up brittle, buggy code. This can easily render a project unmaintainable.
+
+🎯 Many of us are trying to navigate this tension - looking for a sweet spot where AI maximizes productivity. We are also looking for how to shift this sweet spot - finding tasks where agents performance can be shifted from dubious to quality.
+
+🛠 Here, I'll share some approaches that I've found that are particularly helpful for scientific programming in the age of AI. Here, a critical challenge is providing the right information to up-front and allowing agents to surface relevant information on-demand. To do this we can use the Model Context Protocol (MCP) provide information in a format suitable for AI models. In this post, **I'll discuss the development of a Napistu MCP server, how I deployed it to Cloud Run via Github Actions, and provide some case studies of how agents operate with and without using the MCP server**.
+
+## What does developing scientific software look like?
+
+
+
+### The AI-Assisted Development Challenge
+
+To address this transition, I wanted to develop and utilize a codebase which satisfied several constraints:
+- Performs the key analyses supporting each problem
+- Scientifically accurate
+- Developable in little time
+
+This seems to be a classic case of the eternal software problem: you can't have all of {fast, good, and cheap}, pick two. Can genAI help us achieve all three? It's very good at fast & cheap, so can we use it to create good analyses?
+
+**Where AI Development Fails**
+
+Through this project, I encountered several failure modes of AI-assisted coding:
+
+- **Brittle**: Tries to get too fancy by building advanced features with many arguments but no testing
+- **Unmaintainable**: Writing mountains of code with little focus on refactoring, limited docstrings, and no type hints
+- **Wrong**: Most concerning, AI can make implementation decisions that are scientifically inaccurate
+
+A couple of examples I ran into during this analysis:
+- Parsing dependent variables out of a regression formula (e.g., `y ~ a + b`) and turning it into separate tests (`y ~ a` & `y ~ b`)
+- Treating p-values and q-values interchangeably where if q-values are missing, it would filter on `p-values < fdr_cutoff` to identify discoveries
+
+The scary part is that wrong details can be hidden under layers of brittle, unmaintainable code. This led me to develop the [`shackett-utils`](https://github.com/shackett/shackett-utils) package with proper testing and documentation.
+
+
+
+## Model Context Protocol
+
+
+## Developing a Napistu MCP Server
+
+
+
+## Deploying a remote server to Cloud Run
+
+
+## Case studies - agents +/- Napistu MCP
