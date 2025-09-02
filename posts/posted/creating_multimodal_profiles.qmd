@@ -80,7 +80,7 @@ If you'd like to reproduce this analysis, follow these steps:
     source .venv/bin/activate
     
     # Core dependencies
-    uv pip install "napistu[scverse]==0.5.4"
+    uv pip install "napistu[scverse]==0.5.5"
     # Personal utilities package with genomics analysis functions
     uv pip install "git+https://github.com/shackett/shackett-utils.git@v0.1.2[all]" 
     # Additional dependencies
@@ -89,7 +89,7 @@ If you'd like to reproduce this analysis, follow these steps:
     ```
 
 3. Download `Source Data Fig.1` and `Source Data Fig.2` from [Forny et al., 2023](https://www.nature.com/articles/s42255-022-00720-8#Sec39)
-4. Download the `creating_multimodal_profiles.qmd` notebook
+4. Download the [`creating_multimodal_profiles.qmd`](https://github.com/shackett/shackett/blob/master/posts/posted/creating_multimodal_profiles.qmd) notebook
 5. Modify the following code block in your copy of the notebook to set appropriate paths:
     a. `SUPPLEMENTAL_DATA_DIR` should point to the directory containing the download from step 3 ("42255_2022_720_MOESM3_ESM.xlsx" and "42255_2022_720_MOESM4_ESM.xlsx")
     b. `CACHE_DIR` should point to a location where intermediate results and outputs can be saved

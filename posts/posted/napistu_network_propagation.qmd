@@ -43,30 +43,30 @@ Napistu makes network biology practical through three core capabilities:
     - *What are the direct and indirect regulators of a molecular target?*
     - *And — as we'll explore in this post — what shared mechanisms unite a set of disease-associated genes?*
 
-Throughout this post, I’ll use two types of asides to add context without interrupting the main flow:
+Throughout this post, I'll use two types of asides to add context without interrupting the main flow:
 
 - 🟩 Green boxes offer biological background and systems biology “inside baseball.”
 - 🟦 Blue boxes share reflections on building scientific software in the age of AI.
 
 {% include bio-section.html content="
-**For biologists:** Discover a versatile open-source framework designed to tackle one of the key final mile problems when working with high-dimensional genomics data. I’ll show you how network propagation recovers both the genetic drivers of MMA and its major metabolic dysfunction from functional changes in the transcriptome and proteome. This regulation suggests that investigating specific regulatory pathways involved in metabolic sensing — such as ROS and sirtuins — could offer promising insights into MMA pathophysiology.
+**For biologists:** Discover a versatile open-source framework designed to tackle one of the key final mile problems when working with high-dimensional genomics data. I'll show you how network propagation recovers both the genetic drivers of MMA and its major metabolic dysfunction from functional changes in the transcriptome and proteome. This regulation suggests that investigating specific regulatory pathways involved in metabolic sensing — such as ROS and sirtuins — could offer promising insights into MMA pathophysiology.
 " %}
 
 {% include ai-aside.html content="
-**For computational folks:** In this post, I’ll walk you through how Napistu seamlessly integrates network models with high-dimensional data using practical workflows — from multimodal identifier mapping to personalized PageRank with empirical nulls. Plus, I’ll share firsthand insights on leveraging AI to develop complex scientific software — tackling challenges that often lie beyond the reach of large language models (LLMs).
+**For computational folks:** In this post, I'll walk you through how Napistu seamlessly integrates network models with high-dimensional data using practical workflows — from multimodal identifier mapping to personalized PageRank with empirical nulls. Plus, I'll share firsthand insights on leveraging AI to develop complex scientific software — tackling challenges that often lie beyond the reach of large language models (LLMs).
 " %}
 
 ## Series overview
 
 ::: {.columns}
-::: {.column width="49%"}
+::: {.column width="40%"}
 **[Part 1: Creating Multimodal Disease Profiles](https://www.shackett.org/multiomic_profiles/)** established the foundation for this post by systematically extracting disease-relevant molecular signatures from the Forny et al. methylmalonic acidemia dataset. Through careful batch effect correction and both supervised and unsupervised analyses, I uncovered coordinated gene and protein expression programs linked to key disease phenotypes. The result? Clean, quantitative profiles — ready for network-level mechanistic exploration.
 :::
 
 ::: {.column width="2%"}
 :::
 
-::: {.column width="49%"}
+::: {.column width="58%"}
 <img src="figures/napistu_ppr/napistu_blog_post.png" alt="Overview of the Network Biology with Napistu blog series where multimodal data is formatted as molecular profiles, overlaid on genome-scale graphs to find common regulators" style="width: 100%;">
 :::
 :::
@@ -81,19 +81,21 @@ In this post, I'll decode these statistical signals by mapping them onto genome-
 
 To reproduce this analysis:
 
-1. Run the first notebook in the series (`creating_multimodal_profiles.qmd`). This will set up both the Python environment and the input data required for this analysis.
+1. Run the first notebook in the series [`creating_multimodal_profiles.qmd`](https://github.com/shackett/shackett/blob/master/posts/posted/creating_multimodal_profiles.qmd). This will set up both the Python environment and the input data required for this analysis.
 
-2. Set the paths in the following code block:
+2. Download the [`napistu_network_propagation.qmd`](https://github.com/shackett/shackett/blob/master/posts/posted/napistu_network_propagation.qmd) notebook
+
+3. Modify the following code block in your copy of the notebook to set appropriate paths:
     a. `CACHE_DIR` should match the value used in `creating_multimodal_profiles.qmd`
     b. `INPUT_DATA_DIR` should be a suitable location for saving the network representations ($\sim$4 GB in size)
 
-3. Run the notebook and render an HTML output by executing:
+4. Run the notebook and render an HTML output by executing:
     
     ```bash
     quarto render napistu_network_propagation.qmd
     ```
-    
-First, I’ll load the necessary Python modules, configure file paths, set global parameters, and define utility functions.
+
+First, I'll load the necessary Python modules, configure file paths, set global parameters, and define utility functions.
 
 ```{python}
 #| label: env_setup
@@ -111,11 +113,11 @@ import matplotlib.pyplot as plt
 from IPython.display import display, HTML
 
 from napistu import utils as napistu_utils
+from napistu.sbml_dfs_core import SBML_dfs
+from napistu.network.ng_core import NapistuGraph
 from napistu.source import unnest_sources
 from napistu.gcs import downloads
 from napistu.matching import mount
-from napistu.sbml_dfs_core import SBML_dfs
-from napistu.network.ng_core import NapistuGraph
 from napistu.network import net_propagation
 from napistu.network import data_handling
 from napistu.network import ng_utils
@@ -145,6 +147,7 @@ CACHE_DIR = os.path.join(PROJECT_DIR, "cache")
 # inputs
 # model to download from GCS and store in NAPISTU_DATA_DIR
 NAPISTU_ASSET = "human_consensus"
+NAPISTU_ASSET_VERSION = "20250901"
 # H5Mu file containing the optimal model from MOFA+ and regression summaries
 OPTIMAL_MODEL_H5MU_OUTFILE = "mofa_optimal_model.h5mu"
 
@@ -352,7 +355,7 @@ OVERWRITE = False
 
 ## Loading MMA molecular profiles
 
-Next, I’ll load the results generated in the [previous post](https://www.shackett.org/multiomic_profiles/). These are stored in a `MuData` object saved as an `.h5mu` file. (You’ll see the contents of this object later when I discuss adding attributes to the graph.) The only modification I’ll make is adding indicator variables — `is_transcriptomics` and `is_proteomics` — to each modality to easily track measured transcripts and proteins in downstream analyses.
+Next, I'll load the results generated in the [previous post](https://www.shackett.org/multiomic_profiles/). These are stored in a `MuData` object saved as an `.h5mu` file. (You'll see the contents of this object later when I discuss adding attributes to the graph.) The only modification I'll make is adding indicator variables — `is_transcriptomics` and `is_proteomics` — to each modality to easily track measured transcripts and proteins in downstream analyses.
 
 ```{python}
 #| label: data_loading
@@ -375,7 +378,7 @@ for modality in MODALITIES:
 
 ## Loading Napistu data
 
-To simplify access, I’ve uploaded a lightweight test pathway (a merged set of three metabolic pathways) and the full human consensus pathway to Google Cloud Storage (GCS). These pathway representations center around two key objects:
+To simplify access, I've uploaded a lightweight test pathway (a merged set of three metabolic pathways) and the full human consensus pathway to Google Cloud Storage (GCS). These pathway representations center around two key objects:
 
 - [`SBML_dfs`](https://github.com/napistu/napistu/wiki/SBML-DFs): An in-memory relational database organizing molecular species (genes, metabolites, complexes, drugs) and their relationships (reactions, interactions).
 - [`NapistuGraph`](https://github.com/napistu/napistu/wiki/Napistu-Graphs): A directed graph representation of the same network, translating molecular species and reactions into a graph structure for downstream analysis.
@@ -392,7 +395,7 @@ I built this consensus using the Napistu CLI (see the [build pipeline](https://g
 
 ![Napistu human consensus pathway model build pipeline showing integration of multiple biological databases](figures/napistu_ppr/Napistu_build_process.png)
 
-Next, I’ll download and load the human consensus `SBML_dfs` from my public GCS bucket (please avoid frequent downloads 🙂), along with the corresponding `NapistuGraph` and a lookup table of systematic identifiers, by running:
+Next, I'll download and load the human consensus `SBML_dfs` from my public GCS bucket (please avoid frequent downloads 🙂), along with the corresponding `NapistuGraph` and a lookup table of systematic identifiers, by running:
 
 ```{python}
 #| label: napistu_setup
@@ -402,19 +405,23 @@ Next, I’ll download and load the human consensus `SBML_dfs` from my public GCS
 sbml_dfs_path = downloads.load_public_napistu_asset(
     asset = NAPISTU_ASSET,
     data_dir = INPUT_DATA_DIR,
-    subasset = "sbml_dfs"
+    subasset = "sbml_dfs",
+    version = NAPISTU_ASSET_VERSION,
+    overwrite = True
 )
 
 napistu_graph_path = downloads.load_public_napistu_asset(
     asset = NAPISTU_ASSET,
     data_dir = INPUT_DATA_DIR,
-    subasset = "napistu_graph"
+    subasset = "napistu_graph",
+    version = NAPISTU_ASSET_VERSION
 )
 
 species_identifiers_path = downloads.load_public_napistu_asset(
     asset = NAPISTU_ASSET,
     data_dir = INPUT_DATA_DIR,
-    subasset = "species_identifiers"
+    subasset = "species_identifiers",
+    version = NAPISTU_ASSET_VERSION
 )
 
 # ~2 min load
@@ -464,13 +471,13 @@ display(napistu_utils.style_df(participant_counts))
 
 These model statistics highlight the scale and scope of the network. The consensus model integrates over 38,000 molecular species, including ~19,000 proteins (from gene-centric sources like STRING and Dogma) and ~19,000 metabolites and complexes (primarily from Reactome and the BiGG Recon3D model). The graph contains nearly 4 million molecular interactions, the majority from STRING's physical and functional associations. Notably, around 92,000 edges carry deeper mechanistic annotations, such as transcription factor → target or enzyme → substrate.
 
-From a bird’s-eye view:
+From a bird's-eye view:
 
 <div align="center">
 <img src="figures/napistu_ppr/Consensus_graph.png" alt="Genome-scale network diagram for the human consensus model" width="700">
 </div>
 
-This genome-scale view shows the overall network structure, but I can zoom into any region to examine molecular interactions at high resolution. For example, I can explore the molecular neighborhood of **MMUT** (labeled as "MUT" in the network) to identify its upstream regulators and downstream targets. This local view reveals how MMUT connects to both regulatory genes (such as AKT and IGF1) and metabolites (like its enzymatic product methylmalonyl-CoA, shown as L-MM-CoA), illustrating the integration of gene regulatory and metabolic networks.
+This genome-scale view shows the overall network structure, but I can zoom into any region to examine molecular interactions at high resolution. For example, I can explore the molecular neighborhood of **MMUT** (labeled as "MUT" in the network) to identify its upstream regulators and downstream targets. This local view reveals how *MMUT* connects to both regulatory genes (such as *AKT* and *IGF1*) and metabolites (like its enzymatic product methylmalonyl-CoA, shown as L-MM-CoA), illustrating the integration of gene regulatory and metabolic networks.
 
 {% include bio-section.html content="
 Vertex names may differ from the nomenclature used by individual data sources; however, all merges are based on reliable database identifiers, ensuring accurate molecular relationships. Annotations are organized in `Identifiers` objects, which track the identifiers across multiple ontologies related to a given entity. These annotations also incorporate `[SBML](https://sbml.org/)`'s biological qualifiers, which define relationships such as `BQB_IS` (identity), `BQB_HAS_PART` (component of a complex), and `BQB_IS_DESCRIBED_BY` (reference to supporting literature).
@@ -483,7 +490,7 @@ Napistu leverages these annotations both to merge data sources when building the
 </div>
 
 {% include bio-section.html content="
-I created this visualization — and the subgraph figure you’ll see later — using results from this post. If you’re interested in generating visualizations like this, check out [`network_visualzation.qmd`](https://github.com/napistu/napistu-scrapyard/blob/main/applications/forny_2023/network_vis.qmd()). Though Napistu is primarily a Python framework, its companion R package, [**napistu.r**](https://github.com/napistu/napistu-r), is purpose-built for visualizing Napistu networks. It leverages *ggraph* for grammar-of-graphics-based visualizations and uses *reticulate* to bridge R and Python, enabling direct access to Napistu’s data structures and functions.
+I created this visualization — and the subgraph figure you'll see later — using results from this post. If you're interested in generating visualizations like this, check out [`network_visualzation.qmd`](https://github.com/napistu/napistu-scrapyard/blob/main/applications/forny_2023/network_vis.qmd()). Though Napistu is primarily a Python framework, its companion R package, [**napistu.r**](https://github.com/napistu/napistu-r), is purpose-built for visualizing Napistu networks. It leverages *ggraph* for grammar-of-graphics-based visualizations and uses *reticulate* to bridge R and Python, enabling direct access to Napistu's data structures and functions.
 " %}
 
 # Adding data to networks
@@ -500,9 +507,9 @@ To use an `omic dataset in Napistu, I will:
     b. Optionally, variables can be transformed at this stage (e.g., to make them non-negative for personalized pagerank).
 3. *Use these vertex attributes for downstream analyses*, such as setting the `reset_proportional_to` parameter in personalized PageRank.
 
-## Data -> `SBML_dfs`
+## Data $\Rightarrow$ `SBML_dfs`
 
-To identify which results to explore further with network methods, I’ll first review the `MuData` object from the previous analysis. This summary highlights both `MuData`-level attributes — such as *Multi-Omics Factor Analysis (MOFA)* results — and modality-level `AnnData` attributes, including:
+To identify which results to explore further with network methods, I'll first review the `MuData` object from the previous analysis. This summary highlights both `MuData`-level attributes — such as *Multi-Omics Factor Analysis (MOFA)* results — and modality-level `AnnData` attributes, including:
 
 - *obs*: sample-level metadata
 - *var*: feature-level metadata
@@ -515,14 +522,14 @@ To identify which results to explore further with network methods, I’ll first 
 mdata
 ```
 
-Feature-level attributes (e.g., `MuData` or `AnnData`’s *var*, *varm*, *X*, or *layers*) can be seamlessly added to a `NapistuGraph` using high-level workflows that handle identifier mapping, disambiguation, and complex membership automatically.
+Feature-level attributes (e.g., `MuData` or `AnnData`'s *var*, *varm*, *X*, or *layers*) can be seamlessly added to a `NapistuGraph` using high-level workflows that handle identifier mapping, disambiguation, and complex membership automatically.
 
 Napistu supports three data input types:
 - `mudata.MuData` objects contain multiple `AnnData` objects where `var` and `varm` attributes can be defined across multiple datasets. Results can be stored in separate tables, as separate attributes within the same table, or merged into a single attribute (e.g., combining transcript- and protein-level summaries).
 - `anndata.AnnData` objects contribute systematic identifiers from their *var* and feature-level summaries come from either the *var*, *varm*, *X*, or *layers* tables.
 - `pd.DataFrame` objects which include one or more columns with systematic identifiers.
 
-Here, I’ll start with a detailed example using results from a `MuData` object.
+Here, I'll start with a detailed example using results from a `MuData` object.
 
 ### Adding latent factors
 
@@ -558,9 +565,9 @@ for modality in MODALITIES:
     display(napistu_utils.style_df(mofa_lfs[modality].sample(5)))
 ```
 
-To add these results to an SBML_dfs object, I’ll:
+To add these results to an `SBML_dfs` object, I'll:
 - Create a pandas.DataFrame with 0–1 rows per distinct molecular species in the model
-- Store this DataFrame as a key-value pair in the species_data dictionary attribute of the SBML_dfs
+- Store this DataFrame as a key-value pair in the *species_data* dictionary attribute of the `SBML_dfs`
 
 Molecular species are linked to various ontologies (e.g., Ensembl, UniProt, Entrez).  Napistu can distinguish genes, transcripts, and proteins as distinct molecular species ("dogmatic mode"). However, the loaded model merges these into a single species, ignoring such distinctions.
 
@@ -590,7 +597,7 @@ mount.bind_dict_of_wide_results(
 )
 ```
 
-The outcome is a single *species_data* table integrating latent factors from both modalities, mapped onto the model’s molecular species.
+The outcome is a single *species_data* table integrating latent factors from both modalities, mapped onto the model's molecular species.
 
 ```{python}
 #| label: binding_lfs_summary
@@ -608,7 +615,7 @@ The development process followed an iterative approach: first building prototype
 
 ### Adding statistical summaries and modality masks 
 
-Having shown how to bind `MOFA` factor loadings to the pathway, I’ll now add differential expression results.
+Having shown how to bind `MOFA` factor loadings to the pathway, I'll now add differential expression results.
 
 The disease phenotypes of interest are:
 
@@ -617,14 +624,14 @@ The disease phenotypes of interest are:
 - *case*: disease status
 - *responsive_to_acute_treatment*: effectiveness of acute vitamin supplementation
 
-For each phenotype, I’ll add the following statistical summaries:
+For each phenotype, I'll add the following statistical summaries:
 
 - *estimate*: the regression effect size
 - *statistic*: the regression t-statistic
 - *log10p*: the $\log_{10}$ p-value (calculated this way to avoid numerical underflow)
 - *q-value*: the Benjamini-Hochberg FDR-adjusted p-value
 
-I’ll also include the q-values for covariates used in the regressions — namely, the nonlinear associations of *freezing_date* and *proteomics_run_order*.
+I'll also include the q-values for covariates used in the regressions — namely, the nonlinear associations of *freezing_date* and *proteomics_run_order*.
 
 ```{python}
 #| label: binding_statistics
@@ -649,7 +656,7 @@ mount.bind_dict_of_wide_results(
 )
 ```
 
-Finally, I’ll add modality-level indicator variables. For loose results in a `pandas.DataFrame`, I could use `bind_wide_results` to add them directly to the `SBML_dfs`.
+Finally, I'll add modality-level indicator variables. For loose results in a `pandas.DataFrame`, I could use `bind_wide_results` to add them directly to the `SBML_dfs`.
 
 ```{python}
 #| label: binding_modality_masks
@@ -672,18 +679,18 @@ for modality in MODALITIES:
     )
 ```
 
-## `SBML_dfs` -> `NapistuGraph`
+## `SBML_dfs` $\Rightarrow$ `NapistuGraph`
 
-Now, I can pass selected attributes from the *species_data* tables to the `NapistuGraph` object. While the low-level, flexible `set_graph_attrs` method (which also supports setting edge attributes) is available, I’ll use the more user-friendly function instead: `data_handling.add_results_table_to_graph()`.
+Now, I can pass selected attributes from the *species_data* tables to the `NapistuGraph` object. While the low-level, flexible `set_graph_attrs` method (which also supports setting edge attributes) is available, I'll use the more user-friendly function instead: `data_handling.add_results_table_to_graph()`.
 
 {% include bio-section.html content="
-When working with an SBML_dfs loaded from GCS, users can typically rely on the pre-generated `NapistuGraph` bundled with it. These graphs are:
+When working with an `SBML_dfs` loaded from GCS, users can typically rely on the pre-generated `NapistuGraph` bundled with it. These graphs are:
 
 - Directed (though reversible reactions, such as STRING interactions, appear as paired forward and reverse edges)
 - Wired based on a regulatory hierarchy: vertices are arranged in tiers — regulators → catalysts → substrates → reactions → products
 - Sensibly weighted: edges reflect meaningful interaction weights where applicable
 
-The only modification I’ll make for this analysis is reversing the graph’s edges, so that signals can flow from effects (e.g., dysregulated genes) upstream to their potential causes (e.g., transcriptional or enzymatic regulators).
+The only modification I'll make for this analysis is reversing the graph's edges, so that signals can flow from effects (e.g., dysregulated genes) upstream to their potential causes (e.g., transcriptional or enzymatic regulators).
 " %}
 
 Here's a view of the graph showing a random selection of vertices and edges:
@@ -755,7 +762,7 @@ for attr_to_graph in ATTRIBUTES_TO_GRAPH_SPEC:
 
 # Network propagation with Personalized PageRank (PPR)
 
-To link gene-level changes to common regulators, I’ll apply personalized PageRank (PPR) to each vertex attribute in the NapistuGraph. Conceptually, PageRank begins with a signal on a random vertex that, at each step, either:
+To link gene-level changes to common regulators, I'll apply personalized PageRank (PPR) to each vertex attribute in the NapistuGraph. Conceptually, PageRank begins with a signal on a random vertex that, at each step, either:
 
 - Moves to a connected child node with probability $\alpha$
 - Resets to a random vertex with probability $1-\alpha$
@@ -768,7 +775,7 @@ The actual PageRank algorithm finds the stationary distribution of this process 
 
 ## Applying PPR
 
-I’ve prepared the conditions for PPR by defining attributes as reset probability distributions (after L1 normalization). To ensure non-negativity and highlight signal strength, I applied ad hoc transformations—like converting $\log_{10}$ p-values to $-\log_{10}$ p-values and squaring effect sizes. While these choices are reasonable, ideally such transformations would be learned rather than preset.
+I've prepared the conditions for PPR by defining attributes as reset probability distributions (after L1 normalization). To ensure non-negativity and highlight signal strength, I applied ad hoc transformations — like converting $\log_{10}$ p-values to $-\log_{10}$ p-values and squaring effect sizes. While these choices are reasonable, ideally such transformations would be learned rather than preset.
 
 ```{python}
 #| label: select_ppr_attributes
@@ -828,7 +835,7 @@ To correct for this, we must address two sources of bias:
 
 ## Building null distributions
 
-To robustly assess signal enrichment, I generated 500 null PPR distributions by shuffling reset probabilities among measured vertices (using modality masks). Each vertex’s observed PPR value was compared to its null distribution, allowing its empirical quantile to serve as a non-parametric p-value.
+To robustly assess signal enrichment, I generated 500 null PPR distributions by shuffling reset probabilities among measured vertices (using modality masks). Each vertex's observed PPR value was compared to its null distribution, allowing its empirical quantile to serve as a non-parametric p-value.
 
 Because biological signals can both enrich and deplete regions, I separately characterized signals in the right (*enrichment*) and left (*depletion*) tails by:
 - Computing two-tailed p-values where either strong enrichment or depletion would result in a small p-value
@@ -1036,11 +1043,11 @@ for phenotype in phenotypes_of_interest:
 These results are fascinating:
 
 - **MUT**, the major genetic cause of MMA, frequently appears.
-- Both MUT’s substrate, **methylmalonyl CoA** (L-MM-CoA), and its product, **succinyl CoA** (SUCC-CoA), are represented along with a number of other metabolites discussed in the original study such as glutamine. Recovering metabolite associations is particularly interesting because there was no metabolomics data on these cell lines.
+- Both MUT's substrate, **methylmalonyl CoA** (L-MM-CoA), and its product, **succinyl CoA** (SUCC-CoA), are represented along with a number of other metabolites discussed in the original study such as glutamine. Recovering metabolite associations is particularly interesting because there was no metabolomics data on these cell lines.
 - **2-oxoglutarate** (2OG), aka alpha-ketoglutarate, appears in several subgraphs. It is the natural counterpart to dimethyl-oxoglutarate, which Forny et al., demonstrated can rescue the MMA-associated metabolic defect. 
 
 {% include bio-section.html content="
-Transcriptomics associations frequently highlight growth-related genes (e.g., cyclins, IGF1, EGF/R), suggesting that cell line growth rate may be confounded with disease severity. This underscores the inherent biological variability in these datasets. Ideally, doubling time should be included as a covariate in future analyses.
+Transcriptomics associations frequently highlight growth-related genes (e.g., cyclins, *IGF1*, EGF/R), suggesting that cell line growth rate may be confounded with disease severity. This underscores the inherent biological variability in these datasets. Ideally, doubling time should be included as a covariate in future analyses.
 " %}
 
 ## Visualizing induced subgraphs
@@ -1052,9 +1059,9 @@ To more comprehensively visualize these enriched vertices, I generated induced s
 This plot spans the enzymatic causes of MMA — deficiencies in propionate metabolism — with related metabolic effects, such as altered glutamine and glutamate levels, previously observed in MMA patients. Beyond these reassuring associations, the analyses also implicate additional regulatory pathways, including **sirtuins and ROS signaling**. To investigate any of these regulators, the graph can be traversed to generate causal, mechanistic hypotheses linking upstream regulators to downstream molecular effects.
 
 {% include bio-section.html content="
-We know far more about how proteins shape metabolism than how metabolism influences proteins and gene expression. Against this backdrop, it’s notable that sirtuins and ROS signaling emerged — two of the more well-characterized pathways involved in metabolic sensing. Sirtuins function as metabolic sensors by using NAD+ as a cofactor for their histone deacetylase activity, directly linking cellular energy status to chromatin remodeling and the transcriptional regulation of metabolic genes. Reactive oxygen species act as secondary messengers, modulating transcription factor activity and epigenetic modifications to translate metabolic stress and mitochondrial dysfunction into adaptive gene expression programs.
+We know far more about how proteins shape metabolism than how metabolism influences proteins and gene expression. Against this backdrop, it's notable that sirtuins and ROS signaling emerged — two of the more well-characterized pathways involved in metabolic sensing. Sirtuins function as metabolic sensors by using NAD+ as a cofactor for their histone deacetylase activity, directly linking cellular energy status to chromatin remodeling and the transcriptional regulation of metabolic genes. Reactive oxygen species act as secondary messengers, modulating transcription factor activity and epigenetic modifications to translate metabolic stress and mitochondrial dysfunction into adaptive gene expression programs.
 
-Nonetheless, the hub-like roles  of NADH and other cofactors make them challenging to interpret mechanistically. Take water as an example; though not a cofactor, water frequently participates in reactions, many of which produce or consume it. However, the flux of water in individual reactions is negligible compared to its large pool size, so it’s rarely considered a regulated entity or  regulator. To address this issue, water is removed from all reactions during the `drop_cofactors` step of the pathway build process. While this violates mass balance, it preserves the regulatory intent of the `SBML_dfs` and `NapistuGraph`. 
+Nonetheless, the hub-like roles  of NADH and other cofactors make them challenging to interpret mechanistically. Take water as an example; though not a cofactor, water frequently participates in reactions, many of which produce or consume it. However, the flux of water in individual reactions is negligible compared to its large pool size, so it's rarely considered a regulated entity or  regulator. To address this issue, water is removed from all reactions during the `drop_cofactors` step of the pathway build process. While this violates mass balance, it preserves the regulatory intent of the `SBML_dfs` and `NapistuGraph`. 
 
 Handling NADH is more nuanced. In the `drop_cofactors` step, NAD+ and NADH are removed from reactions only when both are present and NADH acts as the substrate. The rationale is that many reactions consume small amounts of energy (NADH → NAD+) without significantly affecting cellular energetics, whereas energy production (NAD+ → NADH) is typically more physiologically meaningful.
 " %}
@@ -1063,7 +1070,7 @@ Handling NADH is more nuanced. In the `drop_cofactors` step, NAD+ and NADH are r
 
 This analysis demonstrates how personalized PageRank on genome-scale networks can transform statistical associations into mechanistic biological insights. This approach:
 
-- ✅ Recovered known regulators (e.g., MMUT)
+- ✅ Recovered known regulators (e.g., *MMUT*)
 - ✅ Validated and expanded findings on glutamine/glutamate metabolism
 - ✅ Linked statistical results to coherent subgraphs of molecular interactions
 - ✅ Identified new regulatory hypotheses (e.g., sirtuins, ROS signaling)
@@ -1091,12 +1098,12 @@ A critical challenge addressed here is that network propagation methods, like pe
 
 To overcome this, I created modality-specific vertex permutation null distributions, allowing me to distinguish genuine biological enrichments from connectivity artifacts.
 
-Napistu’s disease-agnostic design supports any dataset with systematic molecular identifiers. Its modular architecture allows researchers to swap pathway sources, topologies, or propagation algorithms, making it highly adaptable across diverse biological applications.
+Napistu's disease-agnostic design supports any dataset with systematic molecular identifiers. Its modular architecture allows researchers to swap pathway sources, topologies, or propagation algorithms, making it highly adaptable across diverse biological applications.
 
 ## Try it yourself!
 
 The **Napistu framework** and all associated analysis workflows are **open source** and ready to use. The **human consensus network** featured here is available for direct download from my public repository, and the well-documented code serves as a robust template for applying these methods to your own data.
 
-Whether you’re investigating rare diseases, cancer, or complex traits, Napistu provides a systematic pipeline that transforms statistical associations into mechanistic insights.
+Whether you're investigating rare diseases, cancer, or complex traits, Napistu provides a systematic pipeline that transforms statistical associations into mechanistic insights.
 
 🔗 Get started: [github.com/napistu/napistu](https://github.com/napistu/napistu)
