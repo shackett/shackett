@@ -406,8 +406,7 @@ sbml_dfs_path = downloads.load_public_napistu_asset(
     asset = NAPISTU_ASSET,
     data_dir = INPUT_DATA_DIR,
     subasset = "sbml_dfs",
-    version = NAPISTU_ASSET_VERSION,
-    overwrite = True
+    version = NAPISTU_ASSET_VERSION
 )
 
 napistu_graph_path = downloads.load_public_napistu_asset(
