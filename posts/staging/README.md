@@ -13,6 +13,4 @@ source .venv/bin/activate
 # Additional dependencies
 uv pip install openpyxl ipykernel nbformat nbclient
 python -m ipykernel install --name=blog-staging
-
-
 ```
