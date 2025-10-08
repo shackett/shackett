@@ -15,51 +15,51 @@ jupyter: blog-staging
 engine: jupyter
 ---
 
-In this post, I'll provide an overview of the recently updated Napistu human consensus pathway model. This model effectively merges large, but mechanistically inprecise data sources, with focused, physiological resources to construct a genome-scale directed graph of cellular physiology. This new version of the human consensus model aggregates molecular interactions from eight pathway sources, so I nicknamed it the **Octopus**. To mark this occasion, in this post I will:
+Introducing the Octopus: Napistu's eight-source Human Consensus Pathway Model that unites the breadth of protein-protein interaction networks with the depth of regulatory databases and metabolic models.The result is a genome-scale directed graph that is both densely connected and mechanistically precise. In this post, I will:
 
-- an overview of the Octopus model and its construction
-- show side-by-side summaries of individual data sources highlighting their complementarity
-- demonstrate that the model successfully merges results creating a dense network of gene-gene connections which also includes, metabolites, drugs and complexes.
-- show how source-level information can be carried forward to the Octopus's graphical network to augment its vertex and edge features.
+- Provide an overview of the Octopus model and its construction
+- Show side-by-side summaries of individual data sources highlighting their complementarity
+- Demonstrate that the model successfully merges results, creating a dense network covering the complete cellular repertoire of genes, metabolites, drugs, and complexes
+- Illustrate how source-level information can be carried forward to the Octopus's graphical network to augment its vertex and edge features
 
 <!--more-->
 
 <img src="figures/octopus_network/octopus_network.png" alt="Octopus network" style="width: 60%;">
 
-The model itself is distributed as a set of related Napistu assets tarred together. The core components are the two major Napistu data structures:
+The model is distributed as a set of related Napistu assets bundled together. The core components are two major Napistu data structures:
 
 - [`SBML_dfs`](https://github.com/napistu/napistu/wiki/SBML-DFs): An in-memory relational database organizing molecular species (genes, metabolites, complexes, drugs) and their relationships (reactions, interactions). I'll provide a thorough review of this format below.
-- [`NapistuGraph`](https://github.com/napistu/napistu/wiki/Napistu-Graphs): A directed graph representation of the same network, translating molecular species and reactions into a network for downstream analysis.
+- [`NapistuGraph`](https://github.com/napistu/napistu/wiki/Napistu-Graphs): A directed graph representation of the same network, translating molecular species and reactions into a network optimized for downstream analysis.
 
 ## Building the 🐙
 
-I created the Octopus using the Napistu CLI, which allows users to process individual pathway sources (covering most model organisms), merge them into consensus models, and translate them into genome-scale molecular networks. The actual build process just involves running a [Quarto notebook](https://github.com/napistu/napistu/blob/main/dev/create_human_consensus.qmd) with caching enabled. This works fine for my needs, but if Napistu gains traction in the broader research community, the project would benefit from a dedicated workflow manager like NextFlow, WDL, or a cloud friendly service like Cloud Composer-managed Airflow.
+I built the Octopus using Napistu's CLI, which processes individual pathway sources, merges them into consensus models, and translates them into genome-scale molecular networks. The build process runs as a cached [Quarto notebook](https://github.com/napistu/napistu/blob/main/dev/create_human_consensus.qmd) — sufficient for present needs, but a dedicated workflow manager like NextFlow or Airflow would be better suited for broader adoption within the research community.
 
-The build process for the Octopus, illustrated below, involves the following steps:
+The Octopus build process follows seven sequential steps:
 
-1. Ingesting data source specific content and formatting as an `SBML_dfs` object
-2. Unifying compartmentalization resolution so all models are either uncompartmentalized or compartmentalized (and compartmentalized models are defined with similar specificity). The Octopus is uncompartmentalized so this step is easy.
-3. Merging the `SBML_dfs` objects into a single consensus `SBML_dfs`
-4. Removing cofactors so molecules like water do not show up as hub regulators
-5. Translating the `SBML_dfs` object into a `NapistuGraph` object
-6. Exporting derived summaries like precomputed distances between molecular species
-7. Aggregating the final `SBML_dfs`, `NapistuGraph`, and other derived summaries into a single artifact and uploading it to Google Cloud Storage (GCS)
+1. **Ingest** data source-specific content and format as `SBML_dfs` objects
+2. **Standardize** compartmentalization — the Octopus uses an uncompartmentalized approach for simplicity
+3. **Merge** `SBML_dfs` objects into a single consensus model
+4. **Filter** cofactors to prevent molecules like water from appearing as hub regulators
+5. **Convert** the `SBML_dfs` into a `NapistuGraph` network representation
+6. **Generate** derived summaries including precomputed molecular distances
+7. **Package** all components into a single artifact and deploy to Google Cloud Storage
 
 <img src="figures/octopus_network/octopus_build_process.png" alt="Graphical layout of the build process for the Octopus model" style="width: 100%;">
 
 { % include bio-section.html content="
-The choice to ship an uncompartmentalized model is slightly unsatisfying because supporting compartmentalization is a really interesting feature of Napistu. Active and passive transport mechanisms are key components of physiology (e.g., proton transport for ATP production) and pathophysiology (e.g., protein aggregation in Tauopathies). Napistu is uniquely positioned to extend the types of quantitative modeling applied to genome-scale metabolic models to network-based modeling of cellular phsyiology. Beyond thinking of intracellular compartments, we could also treat cell types or tissues as individual compartments to model how local and global processes interconnect, enabling quantitative modeling in the emerging field of Systems Physiology.
+The uncompartmentalized approach sacrifices one of Napistu's most compelling features: modeling spatial organization and transport mechanisms. These are fundamental to physiology and pathophysiology — such as proton transport for ATP synthesis or protein aggregation in neurodegeneration. Napistu could uniquely extend quantitative metabolic modeling principles to genome-scale networks of cellular physiology, even treating cell types or tissues as compartments to model local-global process interactions in Systems Physiology.
 
-I'm excited about these directions but building a compartmentalized model is a significant undertaking and one that really needs to be motivated by a screaming biological use case and quality data sources. The largest challenge in supporting compartments is defining an appropriate compartmental granularity and setting individual sources to this resolution so effective merging can occur (for a discussion see [PubMed](https://pubmed.ncbi.nlm.nih.gov/19933161/)). To address this concern, I am currently coarse graining models to an uncompartmentalized state, but it would be possible to implement an approach using Human Proteome Atlas (HPA), if an appropriate use case arose.
+I'm excited about these directions, but building a compartmentalized model is a major effort — it demands strong biological use cases and high-quality data sources. The biggest challenge is defining the right level of compartmental granularity and aligning data sources to that resolution for effective integration. My current uncompartmentalized approach sidesteps this complexity, though Human Proteome Atlas integration could provide a path forward when the right biological question arises.
 " %}
 
 ## Follow Along!
 
 ### Environment setup
 
-To follow along with the code in this post, you'll need a Python environment with the `napistu` package installed. Here is a simple setup for creating a `venv`:
+To follow along with the code in this post, you'll need a Python environment with the `napistu` package installed. Here's a simple setup using `venv`:
 
-1. Install [uv](https://docs.astral.sh/uv/#highlights) (or just use `pip` install)
+1. Install [uv](https://docs.astral.sh/uv/#highlights) (or use `pip` if preferred)
 
 2. Setup a Python environment:
 
@@ -68,15 +68,15 @@ uv venv --python 3.11
 source .venv/bin/activate
 
 # Core dependencies
-uv pip install "napistu==0.6.3"
+uv pip install "napistu==0.7.1"
 # if you'd like to render the notebook, you'll need to install these additional dependencies
 uv pip install seaborn ipykernel nbformat nbclient
 python -m ipykernel install --user --name=blog-staging
 ```
 
-3. Download the [`octopus_network.qmd`](https://github.com/shackett/shackett/blob/master/posts/posted/octopus_network.qmd) notebook (or just copy and paste the relevant code blocks).
+3. Download the [`octopus_network.qmd`](https://github.com/shackett/shackett/blob/master/posts/posted/octopus_network.qmd) notebook (or copy and paste the relevant code blocks)
 
-4. Configure `data_dir` below to a path where you're comfortable saving the consensus `SBML_dfs` model.
+4. Configure `data_dir` in the setup code to a path where you're comfortable saving the consensus `SBML_dfs` model
 
 ### Configuring the Python notebook
 
@@ -219,48 +219,46 @@ def create_pathway_radar_plot(df, figsize=(8, 7), title='Pathway Analysis Radar 
 
 ## Data sources
 
-To provide a sense of how this works, I'll first discuss the [`SBML_dfs`](https://github.com/napistu/napistu/wiki/SBML-DFs) format itself and then highlight how the consensus module merges them. 
+The Octopus's integration success stems from Napistu's flexible [`SBML_dfs`](https://github.com/napistu/napistu/wiki/SBML-DFs) data structure, which standardizes diverse pathway sources while preserving their unique molecular and mechanistic contributions.
 
 ### Overview of the `SBML_dfs` pathway representation
 
-The core `SBML_dfs` data representation involves five tables linked by with primary key - foreign key relationships.
+The core `SBML_dfs` data representation involves five tables linked by primary key-foreign key relationships:
 
-- **Compartments**: One row per distinct compartment (e.g., cytosol, nucleoplasm). For uncompartmentalized moodels, there only a single compartment, "cellular component", by convention.
-- **Species**: One row per distinct molecular species. These could be proteins, metabolites, complexes, drugs, etc.
-- **Compartmentalized Species**: One row for each compartment where a species exists.
-- **Reactions**: One row per distinct reaction [defined by reaction species]. These could be metabolic reactions, complex formation reactions, undirected physical/functional interactions, etc.
-- **Reaction Species**: One row for each compartmentalized species acting in a given reaction with a specific role (e.g., substrate, interactor, catalyst, inhibitor, etc.).
+- **Compartments**: Define distinct cellular locations (e.g., cytosol, nucleoplasm). Uncompartmentalized models contain only "cellular component" by convention.
+- **Species**: Catalog distinct molecular entities including proteins, metabolites, complexes, and drugs.
+- **Compartmentalized Species**: Map each species to its specific compartmental locations.
+- **Reactions**: Represent distinct biochemical events including metabolic reactions, complex formation, and physical/functional interactions.
+- **Reaction Species**: Define each compartmentalized species' role in specific reactions (substrate, catalyst, inhibitor, etc.).
 
-Additional optional tables are used to store additional molecule- or reaction-level annotations which don't fit into the core schema:
+Additional optional tables store quantitative annotations beyond the core schema:
 
-- **Species Data**: An optional dictionary containing a set of tables with molecular species-specific quantitative attributes.
-- **Reactions Data**: An optional dictionary containing a set of tables with reaction-specific quantitative attributes.
+- **Species Data**: Contains tables with molecular species-specific quantitative attributes.
+- **Reactions Data**: Contains tables with reaction-specific quantitative attributes.
 
 ### Source descriptions
 
-Each data source is formatted as a separate `SBML_dfs` object encapsulating its molecular species, their interactions, and any quantitative data.
+Each data source is formatted as a separate SBML_dfs object encapsulating its molecular species, their interactions, and any quantitative data.
 
-TO DO - update
-
-- *Reactome* is a human gold-standard pathway database
-- *BiGG/Recon3D* is one of the most comprehensive human genome-scale metabolic models, encompassing
-- *STRING* is a database of undirected physical and functional interactions
-- *IntAct* is a database of directed physical and functional interactions
-- *Reactome-FI* is a database of directed physical and functional interactions
-- *OmniPath* is a database of directed physical and functional interactions
-- *TRRUST* is a database of directed physical and functional interactions
-- *Dogma* is a database of directed physical and functional interactions
+- **Reactome** is the human gold-standard pathway database, employing rigorous expert curation with multi-tier review by over 820 scientists to produce reaction-centric models of cellular processes.
+- **Recon3D** is a comprehensive human metabolic model that enables quantitative flux balance analysis and phenotype prediction.
+- **STRING** is a comprehensive protein interaction database that integrates evidence from seven distinct channels with probabilistic scoring to capture functional associations rather than directional causality. Its strength is broad multi-organism coverage with confidence scores calibrated to known pathway relationships.
+- **IntAct** is a manually curated database of experimentally verified molecular interactions with unprecedented annotation depth, making it the gold standard for high-confidence molecular interaction data.
+- **Reactome-FI** transforms Reactome's detailed biochemical reactions into simplified functional interaction networks using machine learning.
+- **OmniPath** is a comprehensive integration database that combines data from over 100 resources into unified directed signaling networks with sophisticated consensus-building mechanisms. It specializes in literature-curated activity flow interactions with effect signs (activation/inhibition).
+- **TRRUST** uses sentence-based text mining to identify transcription factor-target regulatory relationsh1ips from Medline abstracts.
+- **Dogma** is a Napistu-specific resource that contributes gene annotations to help merge species across different primary ontologies without adding reactions to the consensus model.
 
 ### Source comparisons
 
-To understand how the source's complement each other, I'll provide four side-by-side summaries which address the scale and types of interactions in each source:
+To understand how these sources complement each other, I'll provide four side-by-side analyses examining the scale and characteristics of each database:
 
-1. How big is each source (# of species and reactions)?
-2. What types of molecules exist (proteins, metabolites, complexes, drug, etc.)?
-3. What mechanisms connect them (e.g., undirected interactions, directed regulation, metabolite interconversion, etc.)
-4. Do sources contain other quantitative summaries (e.g., expression, binding, etc.)?
+- **Scale**: How many species and reactions does each source contain?
+- **Molecular diversity**: What types of entities exist (proteins, metabolites, complexes, drugs)?
+- **Interaction mechanisms**: How do molecules connect (undirected associations, directed regulation, metabolic transformations)?
+- **Quantitative data**: What additional measurements do sources provide (confidence scores, expression levels, binding affinities)?
 
-These metrics will be constructed from a .json file containing summaries of each source's `SBML_dfs` that were generated as part of the Octopus build process you'll see below. This .json file was then saved to a public GitHub repository for easy access. For transparency, the source summaries were generated with this non-runnable snippet:
+These comparisons use summary statistics extracted from each source's SBML_dfs during the Octopus build process. The summaries were saved to a public GitHub repository for reproducibility and transparency. For reference, the source summaries were generated using this non-runnable code block:
 
 ```{python}
 #| label: non_running_data_setup
@@ -294,7 +292,7 @@ sbml_dfs_dict_summaries = {k: v.get_summary() for k, v in sbml_dfs_dict.items()}
 utils.save_json("<<MY_LOCAL_PATH>>/input_sbml_dfs_summaries.json", sbml_dfs_dict_summaries)
 ```
 
-With the summaries saved to GitHub, I can directly read them from the URL assigned to the `INPUT_SBML_DFS_SUMMARIES_URL` in the setup code block.
+I can load these pre-computed summaries directly from GitHub:
 
 ```{python}
 #| label: load_sbml_dfs_summaries
@@ -302,11 +300,11 @@ With the summaries saved to GitHub, I can directly read them from the URL assign
 sbml_dfs_dict_summaries = requests.get(INPUT_SBML_DFS_SUMMARIES_URL).json()
 ```
 
-Now, we can pull key metrics out of each source's summaries and combine them into side-by-side comparisons.
+These summaries enable direct side-by-side comparison of each source's unique characteristics and contributions to the consensus model.
 
-#### How big is each source?
+#### Scale
 
-To summarize the scale of each source, I'll simply count the number of entities in each `SBML_dfs`' tables.
+I'll count entities in each source to assess their relative sizes.
 
 ```{python}
 #| label: n_entity_types
@@ -321,11 +319,11 @@ entity_type_counts = (
 napistu_utils.show(entity_type_counts)
 ```
 
-Here, we can see that the sources contain a similar number of molecular species but their number of reactions vary wildly from the smallest source, *TRRUST* having ~8K reactions, to the largest, *STRING* having 4.2M reactions. The *Dogma* source actually just contains 1 reaction, but this single reaction is a placeholder becasue this model actually contributes zero reactions to the consensus model and instead just donates gene annotations which help to merge genic species whether their primary ontology is *Ensembl*, *UniProt*, or *Entrez*.
+Sources contain similar numbers of molecular species but reaction counts vary dramatically—from *TRRUST*'s ~8K reactions to *STRING*'s 4.2M. *Dogma* contains only one placeholder reaction since it contributes gene annotations rather than interactions, helping merge species across different ontologies (*Ensembl*, *UniProt*, *Entrez*).
 
-#### What types of molecules exist?
+#### Molecular diversity
 
-Next, I'll ask what types of molecules exist in each source, as inferred from their ontologies.
+Each source specializes in different molecular entity types based on their ontological annotations.
 
 ```{python}
 #| label: n_species_per_type
@@ -349,17 +347,17 @@ fig, ax = create_pathway_radar_plot(
 plt.show()
 ```
 
-Here, we can see that some sources are gene-centric, like *STRING*, *Dogma*, *Reactome-FI*, and *TRRUST*, some are metabolite-centric, like *BiGG*, while others contain diverse molecular species, like *Reactome*, *IntAct*, and *OmniPath*.
+Clear specialization patterns emerge: gene-centric sources (*STRING*, *Dogma*, *Reactome-FI*, *TRRUST*), metabolite-focused databases (*BiGG*), and comprehensive resources covering diverse molecular species (*Reactome*, *IntAct*, *OmniPath*).
 
-#### What mechanisms connect them?
+#### Interaction mechanisms
 
-Next, I'll summarize the roles of each source's reaction species based on the Systems Biology Ontology (SBO). Here is a rough breakdown of these terms' meanings:
+I'll examine interaction types using Systems Biology Ontology (SBO) terms that define molecular roles:
 
-- interactor - undirected interactions
-- stimulator (i.e., activator), inhibitor, modifier (activator or inhibitor) - modulators of expression or activity
-- modified - generally the target of a modifier
-- catalyst - enzymes, transporters, etc. which be modified by a modifier
-- substrate, product - molecules which are consumed or produced by a reaction, generally modified by a catalyst
+- **Interactor**: Undirected associations
+- **Stimulator/Inhibitor/Modifier**: Regulators of expression or activity
+- **Modified**: Targets of regulation
+- **Catalyst**: Enzymes and transporters
+- **Substrate/Product**: Consumed or produced molecules
 
 ```{python}
 #| label: sbo_term_counts
@@ -382,11 +380,11 @@ fig, ax = create_pathway_radar_plot(
 plt.show()
 ```
 
-Here, we can see that more comprehensive data sources like *STRING* are biased towards vague mechanisms, like "interactor", while more focused data sources like *Recon3D* and *Reactome* tend to capture mechanisms more faithfully. 
+Broad sources like *STRING* favor generic "interactor" classifications, while specialized databases like *Recon3D* and *Reactome* capture specific mechanistic detail more faithfully.
 
-#### Do sources contain other quantitative summaries?
+#### Quantitative data
 
-The previous summaries capture the structure of the Octopus model in terms of types of molecules and how they interact, but many sources also contribute additional unique information which can be organized in either species- or reaction-level tables.
+Beyond structural information, sources provide additional annotations and metadata for both molecular species and their interactions.
 
 ```{python}
 #| label: data_summaries
@@ -409,53 +407,48 @@ data_summaries_df = pd.DataFrame(data_summaries_list)
 napistu_utils.show(data_summaries_df)
 ```
 
-These summaries generally fall into two categories:
-
-- Describe the developer's confidence in interactions (e.g., STRING scores, Reactome FI confidence scores, IntAct scores).
-- Provide further granularity into the underlyng molecular mechanisms (e.g., types of interactions in IntAct, or a breakdown of support for activation vs. inhibition in OmniPath).
-
-In both cases, these are valuable data sources for describing how, and how likely molecular interactions are.
+This additional data falls into two key categories: confidence scoring systems (*STRING* interaction scores, *IntAct* experimental evidence) and mechanistic granularity (*OmniPath* activation/inhibition breakdowns, *IntAct* interaction types). Both provide crucial context for assessing interaction reliability and biological mechanisms.
 
 ### Source compatibility
 
-Many data sources used by Napistu, like STRING and OmniPath, already aim to integrate multiple upstream data sources into a consistent consensus. Napistu is able to build on these resources to merge what would otherwise be incompatible data sources into a single, well-mixed model. There are two keys to accomplishing this:
+Many data sources used by Napistu, like *STRING* and *OmniPath*, already aim to integrate multiple upstream data sources into a consistent consensus. Napistu builds on these resources to merge what would otherwise be incompatible data sources into a single, well-mixed model. Without proper integration, sources would separate like oil and water — each forming disconnected subnetworks with minimal overlap. Instead, we need to gel them together by establishing a unified molecular vocabulary that enables seamless integration of source-specific interactions.
 
-1. The `SBML_dfs` data model itself
-    - `Identifiers` for detailed managment of systematic identifiers and supporting diverse molecular species
-    - *SBO* terms and stoichiometry to faithfully describe the mechanisms of reactions
-2. the consensus algorithm which can take a set of `SBML_dfs` objects and merge them into a single `SBML_dfs` consensus
+**Napistu accomplishes this integration through:**
+
+- **Data standardization**: Systematic identifiers and *SBO* ontology terms create a common vocabulary for describing molecules and their interactions across diverse sources
+- **Algorithmic merging**: A consensus procedure that identifies equivalent entities and reconciles overlapping information into a single integrated model
 
 ## Merging `SBML_dfs` objects into a consensus `SBML_dfs`
 
-In order to merge multiple `SBML_dfs` objects into a consensus `SBML_dfs`, we need to resolve entities by determining which compartments, species, reactions, etc. are shared across models. This occurs by processing the tables in a logical order. When working with a given table type, like the species table, we'll work with all of the corresponding tables from each model (e.g., the species tables across each of the input `SBML_dfs` objects) to resolve the distinct entities and thereby construct: 
+Merging multiple `SBML_dfs` objects into a consensus model requires resolving entities by determining which compartments, species, and reactions are shared across sources. This process works through tables in logical order (compartments & species $\rightarrow$ compartmentalized species $\rightarrow$ reactions & reaction species), aggregating a single table drawn from all models to construct:
 
-- a new consensus table (e.g., "species", "compartments", "reactions", etc.) with the same structure as each data source's table.
-- a lookup table from old model-specific primary keys to the new consensus primary keys. This is then used to update downstream tables' foreign keys.
+- **Consensus tables**: New unified tables with standardized structure
+- **Key mapping tables**: Lookup tables linking old source-specific primary keys to new consensus keys for updating foreign key relationships
 
-Two variable present in most tables are particularly important for merging:
+Two variables are critical for successful merging:
 
-- `Identifiers` help to identify what **CAN** be merged by organizing the systematic identifiers of individual species and compartmetns as a list of curations, each defined by the ontology, identifier, and a bioqualifier (e.g., "BQB_IS" or "BQB_HAS_PART").
-- `Sources` help to identify what **HAS** been merged by associating a consensus entity with all of the data sources which contributed to it.
+- **Identifiers**: Determine what *can* be merged by organizing systematic identifiers as curated lists, each defined by ontology, identifier, and bioqualifier (e.g., "BQB_IS" or "BQB_HAS_PART")
+- **Sources**: Track what *has* been merged by associating each consensus entity with all contributing data sources
 
-Following these concepts, the actual [consensus algorithm](https://github.com/napistu/napistu/wiki/Consensus) proceeds by:
+The [consensus algorithm](https://github.com/napistu/napistu/wiki/Consensus) proceeds through four steps:
 
-- 1. Resolving species and compartments using a greedy network-based matching algorithm. This involves linking each compartment or species to its defining identifiers based on their BQB codes (e.g., "BQB_IS") and then identifying species/compartments which are connected by virtue of their shared identifiers.
-- 2. Defining compartmentalized species based on their resolved species and compartments.
-- 3. Updating the annotations of reaction species's compartmentalized species annotations and then determining whether any reactions are redundant.
-- 4. Updating each `species_data` and `reactions_data` table to include the new consensus primary keys and rolling up results if needed to ensure that each data table has at most one row per consensus primary key.
+1. **Resolve foundational entities**: Use greedy network-based matching to identify species and compartments through shared identifiers, connecting entities that share BQB-coded systematic identifiers
+2. **Define compartmentalized species**: Map resolved species to their appropriate compartmental locations
+3. **Merge reactions**: Update reaction species annotations and identify redundant reactions based on participants and mechanisms
+4. **Harmonize data tables**: Update species_data and reactions_data with consensus primary keys, aggregating results to ensure one row per consensus entity
 
 { % include bio-section.html content="
-The consensus algorithm is robust but it can highlight incompatibilities between models, like I mentioned above when discussing compartment resolution. If compartments are defined at different resolutions or if compartments or species use different ontologies, the sources will merge poorly because they are essentially speaking different languages. In the case, the resulting network will contain multiple disconnected subgraphs removing the benefits of consensus modeling. Many of these incompatibilites can be flagged up-front while others can be identified using post-consensus checks like those you will see below focused on whether information from multiple sources was merged.
+The consensus algorithm is robust but exposes incompatibilities between models when sources use different ontologies or resolution levels. If compartments are defined at different granularities or species use incompatible identifier systems, sources merge poorly — essentially speaking different languages. Rather than combining, as intended, they produce networks with multiple disconnected subgraphs that negate the benefits of consensus modeling. Many incompatibilities can be identified during the preprocessing stage through schema validation and syntactic checks. However, additional conflicts often emerge only during post-consensus validation, which evaluates whether molecular species—and, where applicable, reactions—have been accurately and semantically merged across heterogeneous sources.
 " %}
 
 ## Loading the 🐙
 
-I'll provide an overview of the Octopus model using code which can be run off of the environment setup above. The Octopus network is already cached in Google Cloud Storage (GCS), so I will download it and then summarize its properties.
+With the consensus algorithm framework established, let's examine the actual eight-source Octopus model to see how well these theoretical merging principles work in practice. To do this, I’ll download the pre-built model from Google Cloud Storage and provide some quick summaries of its core properties.
 
-To start exploring the consensus pathway, I'll first load the network from Google Cloud Storage (GCS). This artifact gets updated periodically as additional sources are added and Napistu data structures continue to evolve. So that this post and others like [Network Biology with Napistu, Part 2: Translating Statistical Associations into Biological Mechanisms](https://www.shackett.org/napistu_network_propagation/) remain runnable, some versions of the consensus model are tagged so they can be reliably accessed in the future. Here, I'll load a tagged version of the consensus model which will work with Napistu 0.6.3. 
+The Octopus network is available through GCS and gets updated periodically as sources are added and Napistu data structures evolve. To ensure reproducibility for this post and others like [Network Biology with Napistu, Part 2: Translating Statistical Associations into Biological Mechanisms](https://www.shackett.org/napistu_network_propagation/), tagged versions are preserved for reliable future access. Here, I'll load a tagged version compatible with Napistu 0.7.1.
 
 { % include bio-section.html content="
-This is the latest and greatest version of the human consensus model as of September 2025. But, this model will continue to advance (hopefully, soon, we'll be up to the 10 source squid model!), to access the latest and greatest model just install the most recent version of Napsitu and remove the version tag from `gcs.downloads.load_public_napistu_asset`.
+This represents the latest human consensus model as of September 2025, but the model continues advancing (hopefully toward a 10-source 🦑 model soon!). To access the most current version, simply install the latest Napistu release and remove the version tag from `gcs.downloads.load_public_napistu_asset`.
 " %}
 
 ```{python}
@@ -476,7 +469,7 @@ sbml_dfs = SBML_dfs.from_pickle(sbml_dfs_path)
 
 ## 🐙 summary
 
-With the core `SBML_dfs` object loaded, I'll first summarize a few of its high-level properties with the `show_summary` method.
+With the core `SBML_dfs` object loaded, I'll examine its high-level properties using the `show_summary` method.
 
 ```{python}
 #| label: sbml_dfs_summary
@@ -484,15 +477,15 @@ With the core `SBML_dfs` object loaded, I'll first summarize a few of its high-l
 sbml_dfs.show_summary()
 ```
 
-From the summary, the consensus model contains genes/proteins, metabolites, complexes, drugs and regulatory RNAs which exist in a single compartment, *cellular component* (which is the root term of the cellular compartment's GO category). And, there are around 4.5M reactions describing undirected interactinos, directed regulation, and complex (3+ participant) regulatory mechanisms. 
+The consensus model contains genes/proteins, metabolites, complexes, drugs, and regulatory RNAs within a single compartment — cellular component (the root term of GO's *cellular component* category). The model encompasses approximately 4.5M reactions spanning undirected interactions, directed regulation, and complex multi-participant regulatory mechanisms.
 
-The previously shown side-by-side comparisons of individual data sources show the potential benefits of a consensus model, but now, with the Octopus model itself, we can see whether the sources were actually merged into a single well-mixed model. For this to occur, I would expect many molecular species to be shared across sources and for some reactions to be shared as well. This is easiet to think about at the network level where we want 1 network rather than each data source's being relatively highly connected but with few edges between them. 
+While the earlier source comparisons demonstrated each database's potential contributions, the key question remains: did the sources actually merge into a single well-mixed model? Successful integration requires extensive molecular species sharing across sources and meaningful reaction overlap. Rather than separate, highly connected subnetworks with minimal inter-source connections, we want a unified network where sources are genuinely integrated.
 
-To determine whether the models are being merged into a single cohesive model, we can use the model's `Source` objects which track which data source(s) each species, compartment, or reaction came from.
+The model's `Source` objects provide the answer — they track which data sources contributed to each species, compartment, and reaction, enabling direct assessment of integration success.
 
-### Molecular species are a shared "parts list"
+### Shared molecular vocabulary
 
-To see, what data sources molecular species came from, we can create a contingency table of species-source occurrences. The values here reflect how many of a sources moleculear species where merged into that species. In most cases, this is 0 (not in the source) or 1 (exactly one of a source's species matched the consensus species), but in some cases the value ca be larger (e.g., due to multiple protein annotations rolling up to a single gene).
+To assess integration success, I'll examine which data sources contributed to each molecular species through contingency tables of species-source occurrences. Values reflect how many of a source's molecular species merged into each consensus species — typically 0 (not present) or 1 (exact match), though occasionally higher when multiple protein annotations roll up to a single gene.
 
 ```{python}
 #| label: species_source_occurrences
@@ -501,15 +494,13 @@ species_source_occurrence = sbml_dfs.get_source_occurrence("species")
 napistu_utils.show(species_source_occurrence.head())
 ```
 
-To see what species are shared across sources, we can use this occurrence matrix ($X$) to create a coccurrence matrix ($C$):
+I can visualize species sharing patterns by converting the occurrence matrix ($X$) into a cooccurrence matrix ($C$) using:
 
 $$
 C = B B^T
 $$
 
 Where $B = \mathbf{1}(X \neq 0)$ is the binary matrix obtained by converting non-zero entries of $X$ to 1.
-
-To calculate and visualize species source cooccurrences, I'll use the `get_source_cooccurrence` method and create a hierarchically clustered heatmap.
 
 ```{python}
 #| label: species_source_cooccurrences
@@ -523,9 +514,9 @@ species_source_cooccurrence = (
 simple_pd_heatmap(species_source_cooccurrence, "Species Source Co-Occurrence")
 ```
 
-From this output we can see that the more gene-centric and dense data sources tend to have pretty similar molecular coverage and form a single block diagonal cluster. *Reactome*, *Recon3D* and *TRRUST* are more isolated. In the case of TRRUST this is because it is a smaller resource, while Reactome and Recon3D tend to be more molecularly differentiated from the other resources.
+The heatmap reveals that gene-centric, dense sources (*STRING*, *Dogma*, *Reactome-FI*) cluster together with similar molecular coverage, while *Reactome*, *Recon3D*, and *TRRUST* remain more isolated. This reflects *TRRUST*'s smaller size and the molecular specialization of *Reactome* and *Recon3D* compared to comprehensive protein databases.
 
-To look at this systematically, I'll look for how many species arise from 1-and-only-one source.
+To quantify this specialization, I'll identify species unique to individual sources.
 
 ```{python}
 #| label: private_species
@@ -544,22 +535,24 @@ private_species_source_counts = (
 napistu_utils.show(private_species_source_counts)
 ```
 
-From this summary of private counts, we can actually see that all of *Reactome*, *OmniPath*, *IntAct* and *Recon3D* contribute a sizable number of private species. In each case, this is actually reasonable:
+Several sources contribute substantial numbers of private species, each for logical reasons:
 
-- *Reactome* - provides lots of detailed mechanisms involving multiple forms of complexes which are defined with a fine granularity.
-- *OmniPath* - contains a bunch of drugs linked to *PubChem* and microRNAs from *MirBase*.
-- *IntAct* - is primarily proteins and protein-protein interactions, but there are also many interactions involving  small molecules and microRNAs.
-- *Recon3D* - as a detailed model of metabolism *Recon3D* includes many more small molecules and lipids than any other source.
+- **Reactome**: Detailed complex mechanisms with fine-grained complex definitions
+- **OmniPath**: Extensive drug collections (*PubChem*) and microRNAs (*MirBase*)
+- **IntAct**: Small molecules and microRNAs alongside core protein interactions
+- **Recon3D**: Extensive coverage of metabolites and lipids
 
-Overall, the Octopus model convincingly merges molecular species, with proteins arising from multiple sources, and other molecular species primarily arising from more specialized resources.
+The Octopus successfully integrates molecular species, with proteins shared across multiple sources while specialized molecular types arise from domain-specific resources.
 
-### Reactions highlight each source's distinct contributions
+### Reaction overlap reveals data source specialization
 
-To understand what individual sources are "bringing to the table", I will follow a similar approach to species, by looking at reaction source occurrences and cooccurrences.
+To understand what individual sources contribute, I'll analyze reaction source occurrences and cooccurrences using a similar approach to species analysis.
 
-Doing this is a little trickier than species for two reasons:
-- As described in the consensus section, there is a high bar for merging reactions. They are only merged when they have the same participants, with the same *SBO* terms. This means that a reaction between genes *A* and *B* would not be merged if one source annotated them as an inhibitor->modified pair and another source annotated them as a modifier->modified pair.
-- Interactor-interactor interactions are not summarized in the `get_source_occurrence` so this analysis will just focus on the non-interactor reactions. This is primarily for operational reasons, because these functions are useful for adding information to reaction vertices in graphs, and there aren't reaction vertices for interactor-interactor interactions (they are represented as direct interactions between pairs of participants).
+To interpret this analysis, readers should understand two important points:
+
+- **Strict merging criteria**: Reactions merge only with identical participants and *SBO* terms. A reaction between genes *A* and *B* won't merge if one source labels them inhibitor $\rightarrow$ modified while another uses modifier $\rightarrow$ modified, explaining the low overlap we'll observe.
+- **Analysis scope**: This analysis excludes interactor-interactor interactions because the existing tooling is designed to surface information relevant for graph construction, where these interactions become direct edges between molecular species with no reaction vertices added.
+
 ```{python}
 #| label: reaction_source_counts
 
@@ -568,9 +561,9 @@ reactions_source_occurrence = sbml_dfs.get_source_occurrence("reactions")
 napistu_utils.show(reactions_source_occurrence.head())
 ```
 
-As can be seen from some random reactions, the reaction source occurrences are quite sparse. This sparsity combined with the several order of magnitude difference in the number of reactions between sources makes it difficult to visualize the cooccurrences.
+The reaction occurrence data is notably sparse, and the order-of-magnitude differences in reaction counts between sources complicate direct cooccurrence visualization.
 
-To make it easier to look at dependencies between sources, I calculated conditional probabilities of source pairs based on the cooccurrence matrix ($P(A | B)$). This summary captures how likely a reaction associated with one source ($\Pr(B)$) is also associated with another source ($\Pr(A \& B)$).
+To better assess source dependencies, I'll calculate conditional probabilities $\Pr(A|B)$ from the cooccurrence matrix, showing how likely a reaction from source $B$ also appears in source $A$.
 
 ```{python}
 #| label: reactions_source_cooccurrences
@@ -585,17 +578,17 @@ reactions_source_conditional_prob = cooccurrence_to_conditional_prob(reactions_s
 simple_pd_heatmap(reactions_source_conditional_prob, "Conditional probability of reaction found in column source\n given that it occurs in the row source", fmt=".3f", colorbar_label="Probability")
 ```
 
-From these results, reactions from Reactome and Recon3D are generally unique, while there is a meaningful overlap between *Reactome-FI*, *OmniPath*, and *TRRUST*. The largest overlap is between *TRRUST* and *OmniPath* where 50% of *TRRUST* interactions are also in *OmniPath*. This is actually a positive control because *TRRUST* is one of the many data sources which contribute to *OmniPath*.
+The conditional probability analysis reveals distinct patterns: *Reactome* and *Recon3D* reactions remain largely unique, while meaningful overlap exists between *Reactome-FI*, *OmniPath*, and *TRRUST*. The strongest overlap occurs between *TRRUST* and *OmniPath* (50% of *TRRUST* interactions also appear in *OmniPath*) — an expected result since *TRRUST* is one of the resources incorporated into *OmniPath*.
 
-Overall, these summaries show that the Octopus model effectively merges molecular species, while each source contributes a considerable number of unique interactions.
+These patterns demonstrate successful species integration alongside preserved source-specific reaction diversity, with each database contributing substantial unique mechanistic content to the consensus model.
 
 ## Decorating the 🐙 graph with species and reaction data
 
 <img src="figures/octopus_network/shell_stealing_octopus.jpeg" alt="Photo of a shell-stealing octopus" style="width: 100%;">
 
-The `SBML_dfs` comprehensively organizes a pathways data but to actually use this information for downstream analyses like [Network propagation with Personalized PageRank (PPR)](https://www.shackett.org/napistu_network_propagation/) we'll want to work with the network-based representation of the pathway. This `NapistuGraph`'s represent *compartmentalized species* and *reactions* as vertices while edges capture the flow of information between them. As a subclass of `igraph.Graph`, `NapistuGraph`s inherits all of igraph's standard methods for working with graphs. It builds on this framework with additional standard attributes for vertices and edges and Napistu-specific methods.
+While `SBML_dfs` comprehensively organizes pathway data, network analyses like [personalized PageRank](https://www.shackett.org/napistu_network_propagation/) require graph representations. `NapistuGraph`s convert this tabular data into networks where compartmentalized species and reactions become vertices connected by information flow edges. Built on `igraph`'s foundation, they combine versatile graph operations with biological annotations, data provenance, and specialized network biology methods.
 
-A `NapistuGraph` was bundled with the `SBML_dfs` downloaded above, so I can easily load and summarize the network:
+A `NapistuGraph` was bundled with the `SBML_dfs` downloaded above, enabling direct loading and analysis:
 
 ```{python}
 #| label: load_and_summarize_napistu_graph
@@ -611,20 +604,20 @@ napistu_graph = NapistuGraph.from_pickle(napistu_graph_path)
 napistu_graph.show_summary()
 ```
 
-Many of the vertex and edge attributes should be familiar from the `SBML_dfs` summaries.
+Many vertex and edge attributes mirror those from the `SBML_dfs` summaries.
 
-The primary quantitative attribute for the graph is *edge weight* which represents the plausibility/strength of each interaction. Edge weights are used by most graph approaches from calculating shortest paths, to laying out networks, to network propagation. By setting these values appropriately, we can naturally favor gold-standard mechanisms over dubious physical/functional interactions. Capturing this complexity as a single attribute is getting more difficult as the number of data sources increases, with many data sources donating quantitative information which bears upon an edge's regulatory plausibility.
+The critical quantitative attribute is *edge weight*, representing each interaction's plausibility and strength. Edge weights drive most graph algorithms — from shortest path calculations and network layouts to propagation methods. However, capturing this complexity in a single attribute becomes increasingly challenging as more sources contribute quantitative information relevant to regulatory plausibility.
 
 { % include ai-aside.html content="
-For earlier version of the consensus model this involved balancing STRING's quantitative weights with source-level fixed values for other sources. With the addition of new data sources which are of a similar density to STRING, and more reaction data tables with quantitative information reflecting interaction plausibility, using heuristics to set edge weights is increasingly unappealing.
+Earlier versions of the Napistu human consensus model used simple heuristics for edge weighting: assign favorable (low) weights to sparse mechanistic sources like *Reactome* while quantitatively weighting *STRING* based on its confidence scores. This approach worked when *STRING* dominated the quantitative landscape, but the Octopus model's addition of moderately dense sources — *OmniPath*, *IntAct*, and *Reactome-FI* — each with their own confidence metrics complicates this strategy. Rather than continuing to stack ad hoc weighting schemes, the growing diversity of quantitative evidence calls for more principled approaches.
 
-Instead, I am interested learning how much to trust individual edges empirically based on predictive performance. This is hard for biological questions like [predicting regulators and regulons](https://www.shackett.org/napistu_network_propagation/) since we often lack a ground truth. But, we can learn a lot from the network itself - I am particularly interested in how well I can predict edges or vertex attributes based on the network and its quantitative attributes. 
+I'm increasingly interested in learning edge trustworthiness empirically through predictive performance rather than manual calibration. While this is challenging for biological applications like regulatory network prediction due to limited ground truth data, the network itself offers opportunities for self-supervised learning. However, realizing this potential requires a rich feature space beyond basic topological properties — which brings us to the wealth of quantitative information that can be integrated into the NapistuGraph representation.
 " %}
 
-The list above is pretty minimal in terms of the vertex and edges features which could be leveraged for such predictions but there is a LOT of other quantitative information discussed through this post that can be directly passed forward to the *NapistuGraph*. In this example, I'll add the following types of information to created an augmented NapistuGraph with a rich vertex and edge feature spaces:
+The default NapistuGraph contains a limited array of vertex and edge attributes, but there's actually a wealth of quantitative information highlighted throughout this post that can be integrated directly into the Octopus network. The power of Napistu's design becomes apparent when we start layering in this additional context. I'll demonstrate by augmenting the graph with two particularly valuable information types:
 
-- `add_sbml_dfs_summaries` - generates source and ontology occurrence information for all vertices (both species and reaction vertices).
-- `add_all_entity_data` - adds all available information from reactions_data or species_data to the edges and vertices respectively.
+- `add_sbml_dfs_summaries`: Generates source and ontology occurrence data for all vertices, revealing which databases contributed to each node and what biological categories they represent
+- `add_all_entity_data`: Transfers comprehensive quantitative measurements from reactions_data and species_data tables directly onto their corresponding edges and vertices
 
 ```{python}
 #| label: augment_and_summarize_napistu_graph
@@ -639,9 +632,17 @@ napistu_graph.add_all_entity_data(sbml_dfs, "species", mode = "extend")
 napistu_graph.show_summary()
 ```
 
-The end result of this is a comprehensive graph of human cellular physiology which also has detailed annotations around what vertices and edges biologically represent.
+Now, we've gone from a relatively spartan set of vertex and edge attributes to a comprehensive graph of human cellular physiology enriched with detailed biological annotations that describe what each vertex and edge represents. This is a robust foundation for training expressive network-based methods like  graph neural networks.
 
-I'm excited about the potential of this graph for more expressive network-based modeling with graph NNs.
 
 ## Summary
+
+The Octopus model integrates eight diverse pathway databases into a unified, genome-scale network of human cellular physiology. Through systematic merging of complementary data sources, the model establishes a shared molecular vocabulary while preserving each source's specialized contributions:
+
+- **Molecular species integration**: Proteins and other species are effectively shared across sources, creating a common parts list that specialized databases can extend with domain-specific molecules (metabolites from Recon3D, complexes from Reactome).
+- **Reaction specialization**: Sources show modest but meaningful overlap in reactions, with each database contributing unique mechanisms that reflect its individual curation focus.
+
+The resulting NapistuGraph provides a framework for layering extensive biological information onto network structures. Source provenance, confidence scores, ontological classifications, and mechanistic annotations can be systematically integrated as vertex and edge attributes, enabling sophisticated analyses from network propagation to machine learning approaches.
+
+The Octopus model is now ready for use. I’m excited to build on this foundation and to see how the community engages with this new resource.
 
