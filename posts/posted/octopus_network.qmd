@@ -329,7 +329,7 @@ Each source specializes in different molecular entity types based on their ontol
 #| label: n_species_per_type
 
 species_type_counts = (
-    pd.DataFrame({k: v["dict_n_species_per_type"] for k, v in sbml_dfs_dict_summaries.items()})
+    pd.DataFrame({k: v["n_species_per_type"] for k, v in sbml_dfs_dict_summaries.items()})
     .astype('Int64')
     .fillna(0)
     .T
@@ -448,7 +448,7 @@ With the consensus algorithm framework established, let's examine the actual eig
 The Octopus network is available through GCS and gets updated periodically as sources are added and Napistu data structures evolve. To ensure reproducibility for this post and others like [Network Biology with Napistu, Part 2: Translating Statistical Associations into Biological Mechanisms](https://www.shackett.org/napistu_network_propagation/), tagged versions are preserved for reliable future access. Here, I'll load a tagged version compatible with Napistu 0.7.1.
 
 { % include bio-section.html content="
-This represents the latest human consensus model as of September 2025, but the model continues advancing (hopefully toward a 10-source 🦑 model soon!). To access the most current version, simply install the latest Napistu release and remove the version tag from `gcs.downloads.load_public_napistu_asset`.
+This represents the latest human consensus model as of October 2025, but the model continues advancing (hopefully toward a 10-source 🦑 model soon!). To access the most current version, simply install the latest Napistu release and remove the version tag from `gcs.downloads.load_public_napistu_asset`.
 " %}
 
 ```{python}
