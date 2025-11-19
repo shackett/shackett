@@ -15,17 +15,17 @@ jupyter: blog-staging
 engine: jupyter
 ---
 
-Biological applications of graph neural networks typically work with either small curated networks (100s-1,000s of nodes) or aggressively filtered subsets of large databases like STRING. The Octopus model—which I introduced in my previous post—occupies a different space entirely. By integrating eight complementary pathway databases, it creates a genome-scale network with ~50K proteins, metabolites, and complexes spanning ~10M edges, all while preserving rich metadata about edge provenance, confidence scores, and mechanistic detail that filtered approaches discard.
+Biological applications of graph neural networks (GNNs) typically work with either small curated networks (100s-1,000s of nodes) or aggressively filtered subsets of large databases like STRING. The Octopus graph — which I introduced in my previous post — occupies a different space entirely. By integrating eight complementary pathway databases, it creates a genome-scale network with ~50K proteins, metabolites, and complexes spanning ~10M edges, all while preserving rich metadata about edge provenance, confidence scores, and mechanistic detail that filtered approaches discard.
 
-This puts the Octopus in uncharted territory: **large enough to capture genome-scale complexity, yet structured enough to preserve the biological interpretability that makes network analysis valuable**. GNN methods scale well beyond genome-scale requirements (100M+ nodes in social networks), but remain unexplored for comprehensive biological networks that integrate regulatory, metabolic, and interaction data. Bridging this gap requires infrastructure that handles both the biological complexity of multi-source networks and the engineering complexity of training GNNs at scale.
+This puts the Octopus in uncharted territory: **large enough to capture genome-scale complexity, yet structured enough to preserve the biological interpretability that makes network analysis valuable**. GNNs scale well beyond genome-scale requirements (100M+ nodes in social networks), but remain unexplored for comprehensive biological networks that integrate regulatory, metabolic, and interaction data. Bridging this gap requires infrastructure that handles both the biological complexity of multi-source networks and the engineering complexity of training GNNs at scale.
 
-In this post, **I'll introduce [Napistu-Torch](https://github.com/napistu/napistu-torch) — the infrastructure needed to make this uncharted territory navigable**. Available from [PyPI](https://pypi.org/project/napistu-torch/) and indexed by the [Napistu MCP server](https://www.shackett.org/napistu_mcp/), Napistu-Torch provides a modular, reproducible framework for training graph neural networks on comprehensive biological networks. I'll demonstrate that it's feasible to train graph convolutional networks on the complete Octopus using just a laptop (albeit with 2 days of training time for the full suite of models), but the real contribution is the ecosystem itself: the data structures, training pipelines, and evaluation strategies that enable more sophisticated analyses.
+In this post, **I’ll introduce [Napistu-Torch](https://github.com/napistu/napistu-torch) — the infrastructure that finally makes this space navigable**. Available from [PyPI](https://pypi.org/project/napistu-torch/) and indexed by the [Napistu MCP server](https://www.shackett.org/napistu_mcp/), Napistu-Torch provides a modular, reproducible framework for training GNNs on comprehensive biological networks. I'll demonstrate that it's feasible to train graph convolutional networks on the complete Octopus network using just a laptop (albeit with 2 days of training time for the full suite of models). But the real contribution is the ecosystem: the data structures, pipelines, and evaluation strategies that unlock far more sophisticated analyses.
 
 <!--more-->
 
 Specifically, I'll walk through the key components of the Napistu-Torch ecosystem:
 
-- **Data engineering**: Converting `NapistuGraph` objects into PyTorch Geometric `Data` objects while preserving the multi-source edge metadata that distinguishes the Octopus from single-database networks. The `NapistuDataStore` manages caching and lazy loading of derived artifacts, eliminating the overhead of rebuilding datasets — you can immediately start training or evaluating models.
+- **Data engineering**: Converting `NapistuGraph` objects into PyTorch Geometric `Data` objects while preserving the Octopus network's rich vertex and edge metadata. The `NapistuDataStore` manages caching and lazy loading of derived artifacts, eliminating the overhead of rebuilding datasets — you can immediately start training or evaluating models.
 
 - **Model components**: Breaking down the anatomy of a GNN into its core building blocks — encoders that learn vertex representations via message passing, heads that make predictions from embeddings, and optional edge encoders that weight edges based on metadata. I'll compare several architectures (GCN, GraphSAGE, GraphConv) with and without edge encoding.
 
@@ -43,11 +43,11 @@ Graph neural networks in Python typically use [PyTorch Geometric (PyG)](https://
 
 Napistu networks, however, live in a different ecosystem. A `NapistuGraph` (subclass of `igraph.Graph`) stores biological networks with rich vertex and edge metadata—species types, reaction mechanisms, database provenance, confidence scores. Training GNNs on these networks requires bridging these two worlds: preserving Napistu's biological metadata while converting graphs into PyG's tensor-based format.
 
-This is where Napistu-Torch comes in. Following the same design philosophy as Napistu-Py — extending established frameworks rather than reinventing them — Napistu-Torch builds on PyG with biology-aware data structures and methods. The goal is to lean on well-established frameworks like PyG, PyTorch Lightning, and Weights & Biases so the codebase can focus on domain-specific challenges: encoding biological features, managing multi-source metadata, and evaluating models through a biological lens.
+This is where Napistu-Torch comes in. Following the same design philosophy as Napistu-Py — extending established frameworks rather than reinventing them — Napistu-Torch builds on PyG with biology-aware data structures and methods. The goal is to lean on well-established frameworks like PyG, PyTorch Lightning, and Weights & Biases so the codebase can focus on domain-specific challenges: encoding biological signals, integrating diverse metadata, and evaluating models with biologically meaningful metrics
 
 ### `NapistuGraph` → `NapistuData`
 
-The core data structure in Napistu-Torch is `NapistuData`, which extends PyG's `Data` class to handle biological network metadata. At its heart, it contains the same PyTorch tensor components that any PyG model expects:
+A key data structure in Napistu-Torch is `NapistuData`, which extends PyG's `Data` class to handle biological network metadata. At its core, it contains the same PyTorch tensor components that any PyG model expects:
 
 - `x`: vertex attributes [# vertices × # of vertex features]
 - `edge_index`: graph connectivity [2 × # of edges]
@@ -243,25 +243,22 @@ Training a GNN requires coordinating several components: the model architecture 
 
 ```{mermaid}
 graph TB
-    subgraph "Core Components"
-        T[Task<br/>EdgePrediction] --> M[Model<br/>Encoder + Head]
-        D[DataModule<br/>Graph Data + Batching] --> TR[Trainer<br/>Optimization + Logging]
-        M --> TR
-        T -.Defines Loss & Metrics.-> TR
-    end
+    T[Task<br/>EdgePrediction] --> M[Model<br/>Encoder + Head]
+    D[DataModule<br/>Graph Data + Batching] --> TR[Trainer<br/>Optimization + Logging]
+    M --> TR
+    T -.Defines Loss & Metrics.-> TR
     
-    TC[TaskConfig] --> T
-    MC[ModelConfig] --> M
-    DC[DataConfig] --> D
-    TRC[TrainerConfig] --> TR
-    
+    DT[NapistuData] --> D
     TR --> O[Trained Model<br/>+ Checkpoints]
     
-    style TC fill:#fff4e1
-    style MC fill:#ffe1f0
-    style DC fill:#f0e1ff
-    style TRC fill:#e1ffe1
-    style O fill:#e1ffe1
+    style DT fill:#ffeab3,stroke:#c27803,stroke-width:2px,color:#333
+    style O fill:#b3f0c0,stroke:#2d8659,stroke-width:2px,color:#333
+    style T fill:#b3d9f2,stroke:#2e7ba6,stroke-width:2px,color:#333
+    style M fill:#b3d9f2,stroke:#2e7ba6,stroke-width:2px,color:#333
+    style D fill:#b3d9f2,stroke:#2e7ba6,stroke-width:2px,color:#333
+    style TR fill:#b3d9f2,stroke:#2e7ba6,stroke-width:2px,color:#333
+    
+    linkStyle default stroke:#555,stroke-width:3px
 ```
 
 Training deep learning models involves coordinating several standard components: the **Task** defines what we're learning (loss function, metrics), the **Model** implements the neural network architecture, the **DataModule** handles data loading and batching, and the **Trainer** orchestrates the optimization loop. Each component is configured independently, providing modularity and clear separation of concerns.
@@ -323,9 +320,9 @@ For this analysis, all models use the dot product head due to its efficiency on 
 {% include bio-section.html content="
 The dot product head is symmetric — it treats vertex A→B identically to B→A — making it well-suited for undirected interactions but poorly suited for regulation, where the roles of regulator and target fundamentally differ. Asymmetric heads like DistMult could address this by learning distinct representations for source and target vertices, enabling the model to differentiate regulators from their targets.
 
-However, even asymmetric heads may struggle to take advantage of Napistu's diverse edge types: protein-protein interactions, activation, inhibition, catalysis, and more. An expressive asymmetric model might implicitly learn to use these signals, but interpreting what a high prediction score *means* — is it activation? inhibition? binding? — would remain challenging.
+However, even asymmetric heads may struggle to take advantage of Napistu's diverse edge types: protein-protein interactions, activation, inhibition, catalysis, and more. An asymmetric model could implicitly learn these cues, but the meaning of a high prediction score would remain ambiguous: is it activation, inhibition, binding?
 
-Relation-aware heads like RotatE offer a more promising path. Originally developed for knowledge graph completion, these architectures explicitly model edge types as distinct relations, learning separate transformation rules for each. This could enable the model to learn the rules of regulation directly: how activators differ from inhibitors, how regulators differ from binding partners. Such models would generate not just edge predictions, but *typed* edge predictions — precise, testable hypotheses about the nature of regulatory relationships.
+Relation-aware heads like RotatE offer a more promising path. Originally developed for knowledge graph completion, these architectures explicitly model edge types as distinct relations, learning separate transformation rules for each. This approach enables the model to capture the principles of regulation directly, discerning activators from inhibitors and regulators from binding partners. Rather than merely predicting edges, these models yield typed edges — specific, testable hypotheses about the nature of regulatory relationships.
 " %}
 
 ### Edge encoder: weighting message passing
@@ -334,7 +331,7 @@ While many GNN implementations either ignore edge attributes entirely or only ac
 
 **Learned edge weighting in Napistu-Torch.** Napistu-Torch addresses this through the `EdgeEncoder` class, which compresses multi-dimensional edge attributes into a single learned weight that modulates message passing strength. The edge encoder is a lightweight MLP that takes edge features as input and outputs a scalar weight in [0, 1] via sigmoid activation. These learned weights control how strongly each edge contributes during neighborhood aggregation.
 
-This approach learns to filter noisy edges and amplify reliable ones, allowing the model to focus message passing on the most informative connections — particularly valuable in biological networks where edge quality varies significantly across and within data sources. The encoder trains end-to-end with the rest of the model, learning which edge attributes are most predictive for the task while remaining compatible with standard GNN architectures that expect scalar edge weights.
+This approach filters noisy edges and amplifies reliable ones, focusing message passing on the most informative connections — crucial in biological networks where edge quality varies widely. The encoder trains end-to-end with the rest of the model, learning which edge attributes are most predictive for the task while remaining compatible with standard GNN architectures that expect scalar edge weights.
 
 ### Model overview
 
@@ -342,15 +339,23 @@ This approach learns to filter noisy edges and amplify reliable ones, allowing t
 graph LR
     A[Node Features] --> C[Message Passing<br/>Encoder<br/>SAGE/GCN/GraphConv]
     C --> D[Node Embeddings]
-    D --> E[Head/Decoder<br/>Dot Product/MLP/Bilinear]
-    E --> F[Edge Predictions/<br/>Vertex Classification]
+    D --> E[Head<br/>Dot Product/MLP/Bilinear]
+    E --> F[Predictions]
     
     G[Edge Index] --> C
     H[Edge Attributes] -.-> B[Edge Encoder<br/>Optional]
     B -.-> C
     
-    style B fill:#ffd,stroke:#333,stroke-width:2px,stroke-dasharray: 5 5
-    style H fill:#ffd,stroke:#333,stroke-width:2px,stroke-dasharray: 5 5
+    style A fill:#ffeab3,stroke:#c27803,stroke-width:2px,color:#333
+    style C fill:#b3d9f2,stroke:#2e7ba6,stroke-width:2px,color:#333
+    style D fill:#b3d9f2,stroke:#2e7ba6,stroke-width:2px,color:#333
+    style E fill:#b3d9f2,stroke:#2e7ba6,stroke-width:2px,color:#333
+    style F fill:#b3f0c0,stroke:#2d8659,stroke-width:2px,color:#333
+    style G fill:#ffeab3,stroke:#c27803,stroke-width:2px,color:#333
+    style B fill:#b3d9f2,stroke:#2e7ba6,stroke-width:2px,color:#333,stroke-dasharray:5 5
+    style H fill:#ffeab3,stroke:#c27803,stroke-width:2px,color:#333,stroke-dasharray:5 5
+    
+    linkStyle default stroke:#555,stroke-width:3px
 ```
 
 The diagram shows how model components connect during a forward pass. Node features and edge connectivity flow through the message passing encoder to produce node embeddings. The head then transforms these embeddings into task-specific predictions — edge scores for edge prediction, class probabilities for node classification.
@@ -371,7 +376,7 @@ The key Lightning components are:
 
 - **Trainer**: Orchestrates the training loop, handles checkpointing, manages device placement (CPU/GPU/MPS), integrates with experiment tracking tools like Weights & Biases, and implements callbacks like early stopping.
 
-This architecture lets you focus on defining model and task logic while Lightning handles the training mechanics.
+With this architecture, you can concentrate on defining model and task logic, while Lightning takes care of all training mechanics.
 
 ### Data management: batching strategies
 
@@ -393,7 +398,7 @@ For this post, I'm comparing 5 models across different encoder architectures and
 - GCN (+/- edge encoding)
 - SAGE (edge encoding not supported)
 
-These models use identical hyperparameters (200 epochs, same batch configuration, same hidden dimensions) for a fair comparison. They're deliberately unoptimized — no hyperparameter tuning, simple dot product heads—because the goal here is demonstrating feasibility and establishing the infrastructure, not achieving state-of-the-art performance.
+These models use identical hyperparameters (200 epochs, same batch configuration, same hidden dimensions) for a fair comparison. These models are deliberately unoptimized, with no hyperparameter tuning and simple dot-product heads, as the focus is on feasibility and infrastructure rather than peak performance.
 
 **Training configuration in Napistu-Torch.** The `ExperimentConfig` composes lower-level Pydantic configs (`DataConfig`, `ModelConfig`, `TaskConfig`, `TrainerConfig`, `WandBConfig`) with validation and sensible defaults. Define an experiment in a minimal YAML file, inherit defaults automatically.
 
@@ -404,7 +409,7 @@ napistu-torch train graphconv_baseline.yaml --out-dir 20251106_graphconv_baselin
 napistu-torch test 20251106_graphconv_baseline
 ```
 
-Training/validation/test metrics log to Weights & Biases for easy comparison across experiments. Each run saves a `RunManifest` containing the W&B run ID and complete `ExperimentConfig` (with all defaults expanded), making experiments fully reproducible.
+Training/validation/test metrics log to Weights & Biases for easy comparison across experiments. Each run saves a `RunManifest` containing the Weights & Biases run ID and complete `ExperimentConfig` (with all defaults expanded), making experiments fully reproducible.
 
 The configs and training script for these 5 models are available [here](https://github.com/shackett/shackett/blob/main/assets/data/napistu_nets_configs.zip). On an M4 Max MacBook Pro with 48GB of RAM, training the full suite takes ~2 days (~8-12 hours per model).
 
@@ -416,7 +421,7 @@ Now let's load these trained models and compare their performance.
 
 ## Model comparison
 
-**Model evaluation in Napistu-Torch.** The `EvaluationManager` class loads a run's `RunManifest` and provides methods for accessing checkpoints, the `NapistuDataStore`, and W&B metrics — eliminating the need to manually track paths or query APIs. Here, I'll load all five trained models and compare their performance metrics and learned representations.
+**Model evaluation in Napistu-Torch.** The `EvaluationManager` class loads a run's `RunManifest` and provides methods for accessing checkpoints, the `NapistuDataStore`, and Weights & Biases metrics — eliminating the need for manual path management or API queries. Here, I'll load all five trained models and compare their performance metrics and learned representations.
 
 ```{python}
 #| label: basic_model_comparison
@@ -425,7 +430,7 @@ eval_managers = {
     EXPERIMENT_LABELS[out_dir]: EvaluationManager(EXPERIMENTS_DIR / out_dir) for out_dir in EXPERIMENTS
 }
 
-# Extract model summaries directly from W&B using their API
+# Extract model summaries directly from Weights & Biases using their API
 run_summaries = {exp: manager.get_run_summary() for exp, manager in eval_managers.items()}
 
 # visualize model comparison
@@ -572,7 +577,7 @@ All models produce highly correlated embeddings (ρ > 0.6 across all pairs), ind
 
 ### Comparing learned edge weights
 
-As I've [previously discussed](https://www.shackett.org/octopus_network/#decorating-the--graph-with-species-and-reaction-data), confidence in regulatory interactions varies greatly across data sources, and this uncertainty should be reflected in edge weights for downstream network analysis. However, determining appropriate edge weights is challenging when multiple data source attributes each capture different aspects of reliability.
+As I've [previously discussed](https://www.shackett.org/octopus_network/#decorating-the--graph-with-species-and-reaction-data), confidence in regulatory interactions varies greatly across data sources, and edge weights should capture this uncertainty for downstream network analysis. However, determining appropriate edge weights is challenging when multiple data source attributes each capture different aspects of reliability.
 
 The edge encoder provides a way to learn what makes a high-confidence edge empirically. While I'll examine the learned edge features in detail later, here I'll assess whether edge weights are consistent across model architectures by directly comparing the ~10M learned weights from GCN + edge encoding and GraphConv + edge encoding.
 
@@ -728,7 +733,7 @@ Having compared models on performance and learned representations, I'll now exam
 
 1. **Vertex embeddings capture molecular similarity** - Embeddings group similar vertices across entity types, enabling community detection and direct similarity queries. Community detection could identify functional modules — sets of proteins, metabolites, and reactions that cluster together in the embedding space. Similarity queries could assess how closely any two entities resemble each other, even across different entity types.
 
-2. **Learned edge weights for network analysis** - The edge encoder learns weights that reflect edge reliability, potentially replacing hand-crafted heuristics in downstream analyses like network layouts, shortest paths, propagation algorithms, and shallow embedding methods. For multi-source networks like the Octopus, this is particularly valuable: rather than manually deciding how to weight STRING coexpression scores versus IntAct citation counts, the model learns what combinations of edge attributes indicate reliability. 
+2. **Learned edge weights for network analysis** - The edge encoder learns weights that reflect edge reliability, potentially replacing hand-crafted heuristics in downstream analyses like network layouts, shortest paths, propagation algorithms, and shallow embedding methods. For multi-source networks like the Octopus, this is particularly valuable, rather than manually deciding how to weight STRING coexpression scores versus IntAct citation counts, the model learns what combinations of edge attributes indicate reliability. 
 
 3. **Edge predictions for hypothesis generation** - While self-supervised training is the primary motivation for edge prediction, the predictions themselves may identify plausible regulatory connections absent from current databases. This becomes more promising with expressive heads that can model directional regulation rather than the symmetric similarity assumed by the dot product.
 
@@ -777,9 +782,9 @@ fig, axes = plot_coordinates_with_masks(
 plt.show()
 ```
 
-The UMAP visualization shows clear clustering by entity type: proteins cluster with proteins, metabolites with metabolites. This isn't surprising given the network's strong homophily — entities of the same type preferentially connect. STRING alone contributes >80% of the edges in the network, and STRING edges are exclusively protein-protein interactions.
+The UMAP visualization shows clear clustering by entity type: proteins cluster with proteins, and metabolites with metabolites. This isn't surprising given the network's strong homophily — entities of the same type preferentially connect. STRING alone contributes >80% of the edges in the network, and STRING edges are exclusively protein-protein interactions.
 
-However, entity types don't completely segregate. Proteins and metabolites intermix at cluster boundaries, and the embedding shows finer-grained structure within each entity type. This suggests the GNN captures more than just entity type — it's learning biological organization within these categories. To understand what else the embedding has captured, I'll examine how pathway membership and data source annotations are reflected in the learned representations.
+However, entity types don't completely segregate. Proteins and metabolites intermix at cluster boundaries, and the embedding shows finer-grained structure within each entity type. This suggests the GNN captures more than just entity type — it's learning the biological organization within these categories. To reveal what additional information the embedding encodes, I will analyze how pathway membership and data source annotations are reflected in the representations
 
 #### Pathway similarity
 
@@ -839,9 +844,9 @@ plt.show()
 
 The embedding structure reflects the network's edge composition. STRING contributes >80% of edges—all protein-protein interactions — which means the training objective is dominated by getting protein relationships right. This pushes the model to spread proteins across the embedding space to capture their diverse interaction patterns, resulting in low within-source similarity for protein-rich databases: STRING (0.061), IntAct (0.046), OmniPath (0.044).
 
-In contrast, specialized sources with fewer, lower-degree entities get pushed into tighter regions of the embedding space. Reactome (0.550 overall, 0.586 by pathway) and Recon3D (0.531) show much higher within-source similarity. These sources contribute distinctive entity types — complexes and proteoforms for Reactome, detailed metabolic species for Recon3D. The model learns to distinguish these entities from standard proteins. However, because they contribute few edges to the training signal, the model clusters them together rather than resolving fine-grained structure within them.
+In contrast, specialized sources with fewer, lower-degree entities get pushed into tighter regions of the embedding space. Reactome (0.550 overall, 0.586 by pathway) and Recon3D (0.531) show much higher within-source similarity. These sources contribute distinctive entity types — complexes and proteoforms for Reactome, and detailed metabolic species for Recon3D. The model learns to distinguish these entities from standard proteins. However, because they contribute few edges to the training signal, the model clusters them together rather than resolving fine-grained structure within them.
 
-This explains why Reactome pathways show only modest additional cohesion (0.586) compared to Reactome overall (0.550): the model learns "this is a Reactome entity" but doesn't strongly differentiate between specific Reactome pathways.
+This explains why Reactome pathways show only modest additional cohesion (0.586) compared to Reactome overall (0.550), the model learns "this is a Reactome entity" but doesn't strongly differentiate between specific Reactome pathways.
 
 ### Learned edge weights
 
@@ -886,9 +891,9 @@ Finally, I'll explore the types of edges being predicted by the GraphConv GNN.
 
 ### Edge predictions
 
-As I previously discussed, if negative samples are too dissimilar to real edges, the model can focus on vertex attributes which may reveal unlikely or impossible edges rather than learning the biologically meaningful network structure. To combat this, negative samples were generated using the observed node_type strata (i.e., sampling an equal number of species→species, species→reaction and reaction→species edges as the real set of edges). But, there are other vertex features which may trivially distinguish real and fake edges such as there being zero cases of regulatory RNAs interacting with metabolites in the dataset. 
+As previously discussed, when negative samples differ too greatly from real edges, the model can exploit vertex attributes that indicate implausible connections, rather than capturing the underlying biological network structure. To address this shortcut, negative samples were generated using the observed node_type strata (i.e., sampling an equal number of species→species, species→reaction, and reaction→species edges as in the real set of edges). Yet, certain vertex features could trivially separate real and negative edges; for instance, regulatory RNAs never interact with metabolites in the dataset
 
-To assess whether the model is learning to capitalize on a potential lack of calibration between real vertices and negative samples, I'll compare the model's predicted edge probabilities for individual classes of edges to what would be expected just based on how common that type of edge is among real edges compared to negative samples.
+To evaluate whether the model exploits potential misalignment between real edges and negative samples, I’ll compare predicted edge probabilities for each edge class to the probabilities expected from their relative frequencies in real and negative edges
 
 ```{python}
 #| label: edge_prediction_analysis
@@ -916,7 +921,7 @@ The plot reveals two distinct patterns. For common edge types — particularly p
 
 For rare edge types involving specialized entities (complexes, metabolites from Recon3D), the pattern changes. These categories often show extreme enrichment or depletion (|log₂ O/E| > 2), yet the model assigns them consistently high prediction probabilities regardless of whether they're enriched or depleted. This likely reflects the tight embedding clusters observed earlier for Reactome and Recon3D entities — specialized molecular species cluster strongly in the embedding space, leading the dot product head to predict high edge probabilities between them even when such edges are rare in the training data.
 
-This analysis suggests the model has learned meaningful biological structure within major edge types while potentially overgeneralizing for rare, specialized entities. The wide prediction spread for protein→protein edges is encouraging for future work: with more expressive heads and validation datasets, these learned similarity patterns could identify novel regulatory connections within well-represented entity types.
+This analysis suggests the model has learned meaningful biological structure within major edge types while potentially overgeneralizing for rare, specialized entities. The wide prediction spread for protein→protein edges is encouraging for future work, with more expressive heads and validation datasets, these learned similarity patterns could identify novel regulatory connections within well-represented entity types.
 
 ## Summary
 
