@@ -15,59 +15,67 @@ jupyter: blog-staging
 engine: jupyter
 ---
 
-In my [last post](https://www.shackett.org/napistu_torch), I discussed self-supervised edge prediction as a way of embedding genes in a gene-regulatory network.
+In my [last post](https://www.shackett.org/napistu_torch), I discussed self-supervised edge prediction as a way of embedding genes using a gene-regulatory network.
 
 This approach allows genes, metabolites, drugs and other vertices to be connected based on shared network topology. However, to date I've only discussed edge prediction using a dot-product head, where a vertex-pair's edge support is a direct readout of their similarity in embedding space (𝐚 · 𝐛). While surprisingly powerful, this head has limitations when vertices are heterogeneous or interact in qualitatively different ways — particularly when we want to distinguish between activation and inhibition.
 
 Here, I explore more expressive approaches for learning mappings between A → B by evaluating both general edge prediction heads (like MLPs) and "relation-aware" heads that can learn distinct mappings for different edge types. The post will cover:
 
 - Data model and training changes enabling relation-specific predictions
-- Evidence that activation and inhibition emerge as geometric opposites in the learned embeddings
-- Validation against PerturbSeq ground truth demonstrating successful prediction of biologically-grounded signed regulatory interactions
-- Pretrained relation-aware models now available on HuggingFace
+- Geometric analysis revealing how relation-aware heads encode regulatory semantics
+- PerturbSeq validation demonstrating successful prediction of signed regulatory interactions
+- Pre-trained models available on HuggingFace
 
 <!--more-->
 
-Edge prediction is a powerful approach for predicting regulatory relationships between molecular species, but not all regulatory relations are equivalent. They vary both in how molecules interact (physically, functionally, mechanistically) and in the consequences of these interactions (activation, inhibition, ambiguous effects, or no effect). While the edge encoder partially captures this information to weight message passing, the ultimate prediction is a single continuous score representing edge likelihood—without distinguishing the type of interaction.
+Edge prediction is a powerful approach for predicting regulatory relationships between molecular species, but not all regulatory relations are equivalent. They vary both in how molecules interact (physically, functionally, mechanistically) and in the consequences of these interactions (activation, inhibition, ambiguous effects, or no effect). While the edge encoder partially captures this information to weight message passing, the ultimate prediction is a single continuous score representing edge likelihood — without distinguishing the type of interaction.
 
 Ideally, I want models that can predict not just whether an interaction occurs, but how it occurs. This led me to relation-aware approaches. Relations are commonly discussed in the context of knowledge graphs, where qualitatively different vertex types are connected by different relationship types. For example, embedding the Open Targets knowledge graph organizes genes and phenotypes in a common manifold while also connecting drugs, chemical probes, and other entity types. Learning relation-aware edges defines specific transformations that map between distinct regions of the embedding space.
 
-However, I'll be focusing on learning relation-types within a largely homogeneous vertex set—primarily genes and metabolites that can serve multiple regulatory roles. This presents a greater challenge for relation-aware methods, as vertices cannot be cleanly separated by type, and the same molecule may act as both activator and inhibitor in different contexts.
+However, I will be focusing on learning relation-types within a largely homogeneous vertex set — primarily genes and metabolites that can serve multiple regulatory roles. This presents a greater challenge for relation-aware methods, as vertices cannot be cleanly separated by type, and the same molecule may act as both activator and inhibitor in different contexts.
 
 ## Workflow updates supporting relation prediction
 
-Supporting relation-aware heads in a robust training framework required several updates:
+Building robust relation-aware models required improvements to both the Napistu-Torch training framework and the underlying data model.
 
-- **Removing reaction vertices** to enable direct edge prediction between molecular species
-- **Adding relation-type labels** to edges by combining source and target Systems Biology Ontology (SBO) role annotations
+**General framework improvements:**
+
+- **Hugging Face integration** for reproducible datasets and sharing pre-trained models
+- **Training enhancements** including Weights & Biases sweep support and resumable training
+- **Transfer learning capabilities** for loading pre-trained encoders and fine-tuning models
+
+**Relation-specific data model changes:**
+
+- **Reaction vertex removal** to enable direct edge prediction between molecular species
+- **Relation-type labels** derived from source and target Systems Biology Ontology (SBO) role annotations
 
 ### Restructuring the `NapistuGraph` - no more reaction vertices
 
-Earlier versions of Napistu included both molecular species (proteins, metabolites, drugs, etc.) and reaction vertices. For complex regulatory mechanisms like enzymatic reactions, this provided a clear functional description anchoring pairwise molecular interactions. This is also useful for network visualization, since reactions from common sources — particularly the many narrowly-scoped Reactome pathways — provide ideal labels for network neighborhoods.
+Earlier versions of Napistu included both molecular species (proteins, metabolites, drugs, etc.) and reaction vertices. For complex regulatory mechanisms like enzymatic reactions, this provided a clear functional description anchoring pairwise molecular interactions. This was also useful for network visualization, since reactions from common sources — particularly the many narrowly-scoped Reactome pathways — provide ideal labels for network neighborhoods.
 
-However, including reactions has a major downside—individual edges lose their meaning. For example, an enzyme transforming A → B would be encoded as two separate edges (A → R, and R → B). For many purposes this is fine, but for edge prediction it adds more noise than signal. For the model to learn what an A → R → B reaction represents, it would need to encode B's embedding within the R embedding. This is both computationally difficult and conceptually unnecessary, so for GNNs I'm moving to direct A → B connections.
+However, including reactions has a major downside — individual edges lose their meaning. For example, an enzyme transforming A → B would be encoded as two separate edges (A → R, and R → B). For many purposes this is fine, but for edge prediction it adds more noise than signal. For the model to learn what an A → R → B reaction represents, it would need to encode B's embedding within the R embedding. This is both computationally difficult and conceptually unnecessary, so for GNNs I'm moving to direct A → B connections.
 
 Predicting direct connections introduces a wrinkle; I had previously enforced that no more than one edge could connect an A-B pair. Moving to a reaction-less graph, I relaxed this constraint so multiple edges can now connect the same vertex pair. This allows activating, inhibitory, and interaction edges to simultaneously exist — relationships that would have previously been distinguished by their intermediate reaction vertices.
 
 ### Adding `relation_type` to `NapistuData`
 
-When constructing the network graph, I encode each mechanism as a series of pairwise interactions, with each participant assigned a role from the *SBO* controlled vocabulary. *SBO* terms — like interactor, stimulator, inhibitor, modifier, and modified — capture the distinct ways molecules participate in regulatory mechanisms. To create `relation_type` labels for edges, I constructed composite labels by combining each edge's source and target *SBO* terms like "catalyst → reactant", "interactor → interactor", and "stimulator → modified".
+When constructing the network graph, I encode each mechanism as a series of pairwise interactions, with each participant assigned a role from the *SBO* controlled vocabulary. *SBO* terms — like interactor, stimulator, inhibitor, modifier, and modified — capture the distinct ways molecules participate in regulatory mechanisms. To create relation_type labels for edges, I constructed composite labels by combining each edge’s source and target SBO terms, such as “catalyst → reactant,” “interactor → interactor,” and “stimulator → modified."
 
-To support relations in `NapistuData` (a subclass of PyG's `Data`), I added `relation_type` and its associated `relation_manager` (for tracking label metadata) as optional attributes. Creating these relation types is elegantly handled as an extension of the existing "edge strata" functionality, which organizes edges based on vertex and/or species type to create hard negative samples.
+`NapistuData` (a subclass of PyG's `Data`), supports relations through two optional attributes: `relation_type` and its associated `relation_manager` (for tracking label metadata). Creating these relation types is elegantly handled as an extension of the existing "edge strata" functionality, which organizes edges based on vertex and/or species type to create hard negative samples.
 
 ## Fitting relation-(un)aware models
 
 During standard edge prediction, we score a possible edge based on the source and target vertices' embeddings. For relation prediction, we additionally provide heads with a `relation_type` integer to distinguish different types of relations. To evaluate different head architectures, I trained a range of relation-aware heads alongside simpler relation-unaware baselines.
 
-To enable fair and efficient comparison across heads, I first trained a 128-dimensional `GraphConv` message passing encoder with a 32-dimensional edge encoder and a simple dot-product head. I deployed this pretrained model to [HuggingFace](https://huggingface.co/seanhacks/edge_prediction_dotprod_128e), then initialized each head of interest with the pretrained encoder weights.
+To enable fair and efficient comparison across heads, I first trained a 128-dimensional `GraphConv` message passing encoder with a 32-dimensional edge encoder and a simple dot-product head. I deployed this pre-trained model to [Hugging Face](https://huggingface.co/seanhacks/edge_prediction_dotprod_128e), then initialized each head of interest with the pre-trained encoder weights.
 
 To leverage this pretraining, I made three key changes to the training regime:
 
-- Lowered the learning rate substantially from 0.003 (original dot-product head) to 0.0005 (fine-tuned heads)
+- Lowered the learning rate substantially from 0.003 (original dot-product head) to 0.0005 (transfer learning experiments)
 - Used the one-cycle scheduler to gradually ramp up the learning rate
-- Initialized expressive heads with `init_as_identity` settings (when appropriate) so they started from a similar state as the pretrained dot-product head
+- Initialized expressive heads with `init_as_identity` settings (when appropriate) so they started from a similar state as the pre-trained dot-product head
 
-To address the imbalanced distribution of relation types in the training data, I replaced standard binary cross-entropy with a relation-weighted loss. Each relation type's loss contribution is weighted by 1/√(relation-type count), down-weighting abundant relation types (like "interactor → interactor") while emphasizing rare but biologically important ones (like "inhibitor → modified"). This ensures models learn to predict all relation types effectively rather than optimize primarily for the most common edges.
+To address the imbalanced distribution of relation types in the training data, I applied relation-weighting to each head's loss function (binary cross-entropy for most heads and a margin-based loss for TransE and RotatE). Each relation type's loss contribution is weighted by 1/√(relation-type count), down-weighting abundant relation types (like "interactor → interactor") while emphasizing rare but biologically important ones (like "inhibitor → modified"). This ensures that the models learn to predict all relation types effectively, rather than primarily optimizing for the most common edges.
 
 I fitted all models using model-specific configs and the Napistu-Torch CLI.
 
@@ -90,7 +98,7 @@ uv pip install torch-scatter torch-sparse -f https://data.pyg.org/whl/torch-2.8.
 uv pip install napistu==0.8.5
 # pin wandb to 0.22.x for compatibility
 uv pip install wandb==0.22.3 
-uv pip install "napistu-torch[pyg,lightning,analysis]==0.3.5"
+uv pip install "napistu-torch[pyg,lightning,analysis]==0.3.6"
 # For rendering the notebook
 uv pip install ipykernel nbformat nbclient
 python -m ipykernel install --user --name=blog-staging
@@ -99,7 +107,7 @@ python -m ipykernel install --user --name=blog-staging
 3. Download the [`relation_prediction.qmd`](https://github.com/shackett/shackett/blob/master/posts/posted/relation_prediction.qmd) notebook (or copy relevant code blocks).
 
 4. Choose your path:
-   - **Using pre-trained models** (recommended): The notebook will load the models from HuggingFace on-the-fly.
+   - **Using pre-trained models** (recommended): The notebook will load the models from Hugging Face on-the-fly.
    - **Training from scratch**: Download the [model configs and training shell script](https://github.com/shackett/shackett/blob/main/assets/data/relation_prediction_configs.zip) to train models yourself.
 
 5. Configure `WORKING_DIR` in the following code block to point to your working directory.
@@ -111,6 +119,7 @@ python -m ipykernel install --user --name=blog-staging
 #| output: false
 
 # standard library imports
+from itertools import combinations
 import os
 from pathlib import Path
 import textwrap
@@ -179,7 +188,7 @@ MODEL_HF_REPOSITORIES : dict[str, tuple[str, str]] = {
 
 RELATION_AWARE_FOCUSED_HEADS = [
     "distmult",
-    "relation_attention",
+    "transe",
     "relation_gated_mlp",
     "relation_attention_mlp"
 ]
@@ -193,7 +202,7 @@ CROSS_RELATION_PREDICTION_CACHE = "/tmp/cross_relation_prediction_matrices.pkl"
 
 ## Comparing relation-(un)aware models
 
-To compare the trained models, I'll load their checkpoints and evaluation metrics using Napistu-Torch's `RemoteEvaluationManager`, which provides a unified interface for accessing model weights, training configs, and Weights & Biases summaries directly from HuggingFace. (If you are working with local models, you can instead use the similar `LocalEvaluationManager` which directly interacts with Weights & Biases and local models and data.)
+To compare the trained models, I will load their checkpoints and evaluation metrics using Napistu-Torch's `RemoteEvaluationManager`, which provides a unified interface for accessing model weights, training configs, and Weights & Biases summaries directly from Hugging Face. (If you are working with local models, you can instead use the similar `LocalEvaluationManager`, which directly interacts with Weights & Biases and local models and data.)
 
 ```{python}
 #| label: load_experiments
@@ -208,12 +217,13 @@ for model_name, model_info in MODEL_HF_REPOSITORIES.items():
         revision = model_version,
     )
 
-#eval_managers = dict[str, EvaluationManager]()
-#for experiment in EXPERIMENT_DISPLAY_ORDER:
-#    experiment_dir = EXPERIMENTS[experiment]
-#    experiment_path = EXPERIMENTS_DIR / experiment_dir
-#    eval_managers[experiment] = EvaluationManager(experiment_path)
-
+# for local evaluation, instead do this:
+# from napistu_torch.evaluation.manager import LocalEvaluationManager
+# EXPERIMENT
+# eval_managers = dict()
+# for experiment in MODEL_DISPLAY_ORDER:
+#     experiment_path = <<PATH_TO_EXPERIMENT_DIR>>
+#     eval_managers[experiment] = LocalEvaluationManager(experiment_path)
 
 # Load pre-calculated WandB summaries directly from HuggingFace
 run_summaries = {exp: manager.get_run_summary() for exp, manager in eval_managers.items()}
@@ -324,26 +334,25 @@ plt.show()
 
 ### Performance takeaways
 
-Comparing models across standard and relation-weighted AUC reveals several patterns:
+Comparing models' relation-weighted AUC and relation-level AUCs reveals several patterns:
 
-- **More parameters, better performance.** Larger models generally achieve higher AUCs — the top-performing models are the relation-aware MLP variants with 80-100K parameters. However, this relationship isn't strictly monotonic; architectural choices matter as much as raw parameter counts.
-- **Knowledge graph embedding methods struggle.** RotatE underperforms relative to even the simple dot-product baseline, likely because treating the 128-dimensional embedding as 64 complex dimensions reduces the vertex representation's expressivity. TransE performs moderately better but still lags behind custom relation-aware heads, suggesting these methods (designed for heterogeneous knowledge graphs) don't naturally extend to homogeneous molecular graphs where vertices play multiple regulatory roles.
-- **Relation-unaware models still show relation-type variation.** Even the simple dot-product and MLP heads show varying performance across relation types. This likely reflects the same competing demands discussed earlier — vertices involved in many dense interactions (like "interactor → interactor" edges) face more constraints on their positioning in the embedding space than vertices in sparser relation types. Interestingly, retraining the dot-product head with relation-weighted BCE (versus standard BCE) substantially shifts the learned embeddings, demonstrating that relation-type frequency affects vertex positioning even when relation type isn't used as a model input.
-- **Architecture spotlight: Relation-attention MLP.** The top-performing head combines relation-aware multi-head attention with MLP scoring. The architecture uses relation embeddings as queries to attend over edge features (concatenated source and target node embeddings), allowing the model to dynamically select relation-relevant features before final scoring.
+- **Expressive relation-aware MLPs achieve top performance.** The relation-gated MLP and relation-attention MLP heads achieve nearly equivalent performance (~0.87 relation-weighted AUC), representing the ceiling for this architecture and training regime. Both combine relation-specific modulation with multi-layer MLPs to learn flexible, relation-specific transformations.
+- **DistMult achieves remarkable parameter efficiency.** Despite using only ~1,400 parameters (1/500th of the top MLP heads), DistMult achieves 0.865 relation-weighted AUC, trailing the top models by less than 0.01 AUC points. DistMult learns relation-specific scalar weights for each embedding dimension—the scoring function $\text{score}(h, r, t) = \sum_i h_i \cdot r_i \cdot t_i$ means each relation type re-weights the embedding space to emphasize dimensions where related vertices show correlated (positive weights) or anti-correlated (negative weights) patterns.
+- **MLPs enable effective vertex attention.** Both lightweight attention heads (attention and relation-attention) substantially underperform (0.833-0.844 AUC), barely exceeding dot-product performance. The key architectural difference in top-performing attention-based heads is the MLP that processes concatenated source-target embeddings before attention, creating learned edge feature representations that attention can then modulate. Raw attention over node embeddings alone lacks sufficient expressivity.
+- **Knowledge graph embedding methods show variable performance.** RotatE underperforms relative to even the simple dot-product baseline, likely because treating the 128-dimensional embedding as 64 complex dimensions reduces the vertex representation's expressivity. TransE performs moderately better but still lags behind custom relation-aware heads. The margin loss used by both methods may be poorly suited for edge prediction—it enforces pairwise rankings between individual positive-negative pairs rather than learning distributional differences between positive and negative edge populations (as BCE loss does). In contrast, DistMult uses BCE loss, and this likely contributes to its strong performance.
+- **Relation-unaware models show relation-type variation.** Even the simple dot-product and MLP heads show varying performance across relation types. This likely reflects competing demands on vertex positioning—vertices involved in many dense interactions (like "interactor → interactor" edges) face more constraints in the embedding space than vertices in sparser relation types. Retraining the dot-product head with relation-weighted BCE (versus standard BCE) substantially shifts the learned embeddings, demonstrating that relation-type frequency affects vertex positioning even when relation type isn't used as a model input.
 
 ## Evaluating relation-aware models
 
-To explore whether relation-aware models are making meaningful signed regulatory predictions, I'll evaluate them using three analyses:
+To explore whether relation-aware models are making meaningful signed regulatory predictions, I will evaluate them using three analyses:
 
-1. Using interpretable relation-aware knowledge graph embedding heads, I'll examine the geometric representation of activation and inhibition in the learned transformations.
-2. For top-performing heads, I'll explore the strength of regulatory predictions — are scores similar regardless of the putative relation type, or do models confidently predict relation-type-specific interactions?
-3. Leveraging PerturbSeq data, I'll assess whether models' top-scoring relation-type predictions (activation vs. inhibition) align with experimentally observed transcriptional responses to genetic perturbations.
+1. Using interpretable relation-aware knowledge graph embedding heads, I will examine the geometric representation of activation and inhibition in the learned transformations.
+2. Exploring top-performing heads, I will examine the strength of regulatory predictions — are scores similar regardless of the putative relation type, or do models confidently predict relation-type-specific interactions?
+3. Leveraging PerturbSeq data, I will assess whether models' top-scoring relation-type predictions (activation vs. inhibition) align with experimentally observed transcriptional responses to genetic perturbations.
 
 ### What is the geometry of activation and inhibition?
 
-To understand how relation-aware heads encode regulatory semantics, I examine the learned relation embeddings from three knowledge graph embedding methods: RotatE (rotation angles), TransE (translation vectors), and DistMult (dimensional scaling weights). Each method learns these transformations as model weights, allowing direct inspection of how relation types are geometrically encoded.
-
-Since these are deviations from identity transformations (zero rotation for RotatE, zero translation for TransE, unit scaling for DistMult), I can extract and compare how different relation types transform the embedding space.
+To understand how relation-aware heads encode regulatory semantics, I will examine the learned relation embeddings from three knowledge graph embedding methods: RotatE (rotation angles), TransE (translation vectors), and DistMult (dimensional scaling weights). Each method learns these transformations as model weights, allowing direct inspection of relation types' geometric encoding.
 
 ```{python}
 #| label: extract_relation_embeddings
@@ -381,7 +390,11 @@ Rather than examining all relation types globally, I will focus on three biologi
 
 #### Do stimulators and inhibitors have opposing transformations?
 
-If activation and inhibition are fundamentally opposite processes, their learned embeddings should be anti-correlated ($r_{\text{stimulator → modified}} \approx -r_{\text{inhibitor → modified}}$).
+If activation and inhibition are fundamentally opposite processes, their learned embeddings should anti-correlate:
+
+$$
+r_{\text{stimulator → modified}} \approx -r_{\text{inhibitor → modified}}
+$$
 
 ```{python}
 #| label: activation_vs_inhibition
@@ -408,16 +421,22 @@ stim_vs_inhib = pd.DataFrame({
         similarity_matrices["DistMult"][regulatory_relations["activation"], regulatory_relations["inhibition"]].item(),
         median_similarities["DistMult"]
     ]
-}, index=["stim_vs_inhib", "median_similarity"])
+}, index=["Spearman ρ: activation vs. inhibition", "Spearman ρ: median"])
 
 display(napistu_utils.style_df(stim_vs_inhib, hide_index=False))
 ```
 
-**Activation and inhibition are not geometric opposites.** All three methods show weak or positive correlation (RotatE: 0.174, TransE: 0.050, DistMult: 0.637) rather than the expected anti-correlation. While these relation types produce different edge predictions, they don't encode opposing transformations. Instead, they likely emphasize different subsets of embedding dimensions.
+**Activation and inhibition are not geometric opposites.** All three methods show weak or positive correlation rather than the expected anti-correlation. The positive correlations suggest that "being a regulator" is more important than the direction of regulation (activation versus inhibition) in structuring these transformations — both relation types emphasize similar regulatory dimensions rather than encoding opposing effects.
 
-#### Are interactor edges near identity?
+#### How are undirected relation-types encoded?
 
-Since protein-protein interactions are symmetric, they shouldn't require substantial transformations relative to other relation types.
+Protein-protein interactions are undirected—they exist in the training data as both A → B and B → A edges with the same "interactor → interactor" relation type. One might expect this bidirectional structure to push the relation embedding toward identity (zero rotation, zero translation, unit scaling), which would naturally satisfy:
+
+$$
+\text{score}(A, r_{\text{interaction}}, B) \approx \text{score}(B, r_{\text{interaction}}, A)
+$$
+
+To test whether interactor edges learn identity-like transformations, I will extract the learned relation embeddings from each model and compare each relation type's deviation from identity to the median deviation across all relation types.
 
 ```{python}
 #| label: interactor_magnitude
@@ -433,20 +452,21 @@ for method_name, embeddings in [
     interactor_magnitude = all_magnitudes[regulatory_relations["interaction"]].item()
     interactor_data[method_name] = [interactor_magnitude / median_magnitude]
 
-interactor_df = pd.DataFrame(interactor_data, index=["interactor_vs_median"]).round(2).T
+interactor_df = pd.DataFrame(
+    interactor_data, 
+    index=["interaction transformation norm\n÷\nmedian transformation norm"]
+).round(2).T
 display(napistu_utils.style_df(interactor_df.T, hide_index=False))
 ```
 
-**Interactor edges are not near identity.** All three methods require typical or above-median transformations for protein-protein interactions (RotatE: 1.11×, TransE: 1.00×, DistMult: 1.24×). This makes sense in retrospect: the loss function rewards discriminating real interactions from negative samples, not maintaining geometric symmetry.
+**Interactor edges are not near identity.** All three methods learn typical or above-median transformations for protein-protein interactions. While this seems to violate the symmetry requirement for undirected edges, the loss functions don't actually enforce equal scores for A → B and B → A pairs. Instead, they optimize discrimination between real edges and negative samples. For TransE, edges are scored as $\text{score}(h, r, t) = -\|h + r - t\|$, but the margin-based loss compares these scores to negatives — meaning non-zero transformations can provide discriminative power even without maintaining symmetry.
 
 #### Do the three methods agree on regulatory semantics?
 
-If all three methods learn similar patterns for how relation types relate to each other, it would suggest robust biological structure in the embeddings.
+If all three methods learn similar patterns for how relation types relate to each other, it would suggest they're converging on shared regulatory semantics.
 
 ```{python}
 #| label: method_agreement
-
-from itertools import combinations
 
 # Compare similarity matrices pairwise
 n_relations = len(relation_types)
@@ -457,133 +477,29 @@ for method1, method2 in combinations(similarity_matrices.keys(), 2):
     sim1_flat = similarity_matrices[method1][mask]
     sim2_flat = similarity_matrices[method2][mask]
     rho = compute_spearman_correlation_torch(sim1_flat, sim2_flat, device='cpu')
-    agreement_data[f"{method1}_vs_{method2}"] = [rho]
+    agreement_data[f"{method1} vs {method2}"] = [rho]
 
-agreement_df = pd.DataFrame(agreement_data, index=["spearman_rho"]).T
+agreement_df = pd.DataFrame(agreement_data, index=["Spearman ρ"]).T
 display(napistu_utils.style_df(agreement_df.T, hide_index=False))
 ```
 
-**The three methods learn different geometric patterns.** The weak inter-method correlations show that RotatE, TransE, and DistMult don't converge on a shared representation of regulatory relationships. This partially explains why DistMult dramatically outperforms the others—it's not that DistMult found the "right" geometry, but rather that its dimensional weighting approach is better suited to the BCE loss and edge prediction task than margin-based spatial transformations.
+**The three methods learn different geometric patterns.** The weak inter-method correlations show that RotatE, TransE, and DistMult don't converge on a shared representation of abstract regulatory relationships, instead they learn method-specific solutions to the edge discrimination task.
 
-### What is the geometry of activation and inhibition?
+#### Geometry summary
 
-To see if relation-aware heads are learning meaningful regulatory semantics, I'll examine three interpretable knowledge graph embedding methods:
+The geometric analysis reveals that knowledge graph embedding methods don't naturally encode biological intuitions about regulatory relationships:
 
-1. **DistMult** learns relation-specific scalar weights for each embedding dimension, effectively defining which dimensions matter for each relationship type. The scoring function $\text{score}(h, r, t) = \sum_i h_i \cdot r_i \cdot t_i$ means each relation type re-weights the embedding space to emphasize dimensions where related vertices show correlated (positive weights) or anti-correlated (negative weights) patterns.
-3. **TransE** defines relation-specific translations as learned vectors that translate the source vertex onto the target vertex in the embedding space.
-2. **RotatE** splits the vertex embedding (128 dimensions) into 64 pairs and treats each pair as the real and imaginary components of a complex number. It then learns relation-specific rotations in complex space that map the source vertex onto the target vertex. A major caveat in interpreting RotatE results is that it doesn't actually outperform the simple dot-product baseline. This may be because treating the embedding as 64 complex dimensions (rather than 128 real dimensions) reduces the vertex representation's expressivity.
+- **Activation and inhibition are not geometric opposites**, showing weak or positive correlations rather than anti-correlation
+- **Undirected edges don't require identity transformations**, with interaction edges learning typical or above-median transformation magnitudes despite being bidirectional in the training data
+- **Methods don't converge on shared geometric patterns**, suggesting they learn different solutions rather than discovering universal principles of abstract biological regulation
 
-Going into this analysis, I had two hypotheses:
-
-1. Interactor edges should have minimal deviations from identity: small rotations for RotatE, small translation vectors for TransE, and weights near 1.0 for DistMult. This follows from the symmetric nature of protein-protein interactions.
-
-2. Activation and inhibition should partially oppose one another: $r_{\text{stimulator → modified}} \approx -r_{\text{inhibitor → modified}}$.
-
-Since relation embeddings are directly learned as model weights, I can extract these transformations and examine how different relation types are geometrically encoded.
-
-```{python}
-#| label: extract_relation_embeddings2
-import torch
-
-DistMult_head = models["distmult"].task.head.head
-DistMult_scalars = DistMult_head.relation_emb.weight.detach().cpu()
-
-RotatE_head = models["rotate"].task.head.head
-# relation embedding are the real and complex rotation angles in radians
-RotatE_phases = RotatE_head.relation_emb.weight.detach().cpu()
-
-TransE_head = models["transe"].task.head.head
-TransE_vectors = TransE_head.relation_emb.weight.detach().cpu()
-```
-
-To summarize the learned transformations, I calculate three metrics for each relation type:
-
-1. **Total phase**: L1 norm of RotatE rotation angles across all 64 complex dimensions
-2. **Total translation**: L1 norm of TransE translation vectors across all 128 dimensions
-3. **Effective translation dimension**: Number of dimensions over which the TransE signal is distributed (using inverse participation ratio)
-
-```{python}
-#| label: summarize_transformation_geometry
-
-geometry_summaries = pd.DataFrame({
-    "relation_type": relation_types,
-    
-    # RotatE: deviation from zero rotation (identity)
-    "rotate_deviation": RotatE_phases.abs().sum(dim=1).numpy() * 100,
-    # TransE: deviation from zero translation (identity)  
-    "transe_deviation": TransE_vectors.abs().sum(dim=1).numpy(),
-    # DistMult: deviation from unit scaling (identity)
-    "distmult_deviation": abs(DistMult_scalars - 1.0).sum(dim=1).numpy(),
-    
-    # effective dimensionality of each measure    
-    "rotate_effective_dim": compute_effective_dimensionality(RotatE_phases.abs()),
-    "transe_effective_dim": compute_effective_dimensionality(TransE_vectors.abs()),
-    "distmult_effective_dim": compute_effective_dimensionality(abs(DistMult_scalars - 1.0)),
-    
-}).sort_values(by="distmult_deviation", ascending=False)
-
-display(napistu_utils.style_df(geometry_summaries, hide_index=True))
-```
-
-As initially hypothesized, "interactor → interactor" edges result in minimal RotatE rotations. However, TransE translations for interactors have a surprisingly large magnitude (6.7). While this seems to violate the symmetry requirement (since $A + r - B \neq B + r - A$), the loss function doesn't directly penalize this asymmetry. Edge scores are calculated as $-\|\text{source} + r - \text{target}\|$, but the actual loss compares real edges to negative samples. The model may therefore learn translation vectors that improve discrimination between real and negative edges, even if those vectors aren't semantically symmetric.
-
-This interpretation is supported by the high effective dimensionality of "interactor → interactor" translations (spreading signal across many dimensions for discrimination) compared to the low effective dimensionality of relation types like "stimulator → reactant" and "catalyst → reactant" (concentrating signal in fewer, potentially more semantic dimensions).
-
-With the caveat that TransE vectors capture discriminative signals that may not be semantically meaningful, I can still search for semantic structure by comparing translation vectors across relation types.
-
-```{python}
-#| label: plot_relation_embedding_correlations
-
-embeddings_data = {
-    'RotatE': RotatE_phases,
-    'TransE': TransE_vectors,
-    'DistMult': DistMult_scalars - 1.0  # relative scale (deviation from identity)
-}
-
-fig, axes = plt.subplots(2, 2, figsize=(15, 15))
-axes = axes.flatten()
-
-for idx, (method_name, embeddings) in enumerate(embeddings_data.items()):
-    ax = axes[idx]
-    
-    # Compute correlation matrix
-    corr_matrix, _ = compute_correlation_matrix(embeddings.T)
-    
-    # Plot heatmap
-    _ = plot_heatmap(
-        corr_matrix,
-        row_labels=relation_types,
-        title=f'{method_name} relation similarity',
-        cmap='RdYlBu_r',
-        fmt='.2f',
-        vmin=-1,
-        vmax=1,
-        center=0,
-        cbar_label='Spearman ρ',
-        cbar=False,
-        mask_upper_triangle=True,
-        square=True,
-        cluster='both',
-        cluster_method='average',
-        cluster_metric='correlation',
-        ax=ax
-    )
-axes[-1].set_visible(False)
-
-plt.tight_layout()
-plt.show()
-```
-
-This heatmap reveals two prominent features:
-
-1. **Relation types ending in "reactant" cluster together.** Catalysts, inhibitors, and stimulators are primarily genes/proteins, while reactants are generally metabolites. The similar translation vectors for "X → reactant" edges likely reflect a systematic transition between protein and metabolite regions of the embedding space — exactly the kind of heterogeneous vertex mapping that knowledge graph embedding methods like TransE are designed to learn.
-2. **"Inhibitor → modified" opposes "modifier/stimulator → modified".** The negative correlation between these vectors suggests that, as initially hypothesized, activators and inhibitors occupy separated regions of the embedding space, resulting in partially opposing translation vectors.
+The training graph is dense and shaped by experimental ascertainment biases — different relation types are more readily detected for different subsets of vertices. Knowledge graph embedding heads struggle to cleanly separate activators from inhibitors through vertex positioning alone, instead learning transformations that discriminate real edges from negatives without capturing clear regulatory semantics. DistMult's strong performance despite this limitation is impressive.
 
 ### Are models predicting relation-specific interactions?
 
-If heads are learning relation-type-specific transformations, edges should score highly for some relation types and poorly for others. If heads rely primarily on vertex embeddings alone, edge scores should remain similar regardless of the assigned relation type.
+If heads are learning relation-type-specific transformations, edges should score highly for some relation types and poorly for others. If heads rely on vertex embeddings alone, edge scores should remain similar regardless of the assigned relation type.
 
-To evaluate the specificity of relation-type-based scoring, I score each test set edge under every possible relation type, then calculate the Spearman correlation between relation types' edge score distributions. High correlations indicate a model assigns similar scores regardless of relation type, while low correlations suggest relation-specific predictions.
+To evaluate the specificity of relation-type-based scoring, I will score each test set edge under every possible relation type, then calculate the Spearman correlation between relation types' edge score distributions. High correlations indicate a model assigns similar scores regardless of relation type, while low correlations suggest relation-specific predictions.
 
 ```{python}
 #| label: calculate_relation_type_score_correlations
@@ -631,13 +547,9 @@ plt.show()
 
 From these cross-relation-type score correlations, several patterns emerge:
 
-- **Expressive relation-aware heads show strong relation-type specificity.** The relation-gated MLP and relation-aware attention heads generate predictions that are highly dependent on relation type, with lower cross-relation correlations indicating distinct scoring patterns for different edge types.
-- **Knowledge graph embedding methods score edges similarly across relation types.** TransE and DistMult tend to assign high or low scores to edges regardless of relation type, as evidenced by the uniformly high correlations. However, some structure exists — interactor-style edges ("interactor → interactor" and "* → modified") consistently score similarly to each other.
-- **TransE's geometric oppositions don't translate to prediction differences.** The strong correlations among "* → modified" edges in TransE seem to contradict the activation-inhibition opposition observed in the translation vector analysis. This discrepancy suggests TransE relies more heavily on source and target vertex embedding similarity (potentially incorporating relation-agnostic discriminative signals) than on the learned relation-specific transformations.
-
-These limitations of knowledge graph embedding methods are not surprising. These methods were designed to embed heterogeneous vertex types (genes, diseases, drugs) in a common space, where certain relation types exist exclusively between specific vertex subsets (e.g., drug-target interactions, drug-disease indications). This allows clean vertex separation by type while using relation-specific transformations to bridge them. However, regulatory networks are more homogeneous — molecules are all the same fundamental vertex type. Many molecules can serve as both activators and inhibitors, participating in regulatory, physical, and functional interactions simultaneously. This ambiguity makes it harder for simple geometric transformations to capture regulatory semantics.
-
-By generating relation-type-dependent predictions, the expressive attention and MLP heads demonstrate potential for distinguishing the multiple regulatory roles molecules can fill. While these heads perform well for edge prediction, validating their predictions against orthogonal data sources is critical for assessing their utility in predicting novel interactions.
+- **Top-performing models show strong relation-type specificity.** DistMult, relation-gated MLP, and relation-attention MLP heads all generate predictions that are highly dependent on relation type, with lower cross-relation correlations indicating distinct scoring patterns for different edge types. This relation-type specificity appears essential for achieving top performance (>0.86 relation-weighted AUC).
+- **High-performing heads share common structural patterns.** The top three model's relation-type score correlation structures are similar (rho ~= 0.75 DistMult-MLPs, and rho = 0.96 MLP-MLP), suggesting they are learning similar patterns. This is particularly apparent for "modifier → modified" edges, which are distinguished from other relation types. This may reflect a source-specific curation quirk that provides a strong training signal: "modifier → modified" edges arise primarily from a single source (Omnipath) when an interaction is annotated as both activation and inhibition, creating a distinctive pattern that these models learn to recognize.
+- **TransE shows limited relation-type differentiation.** TransE assigns similar scores to edges regardless of relation type, as evidenced by uniformly high cross-relation correlations. This indicates that it relies more heavily on source and target vertex embedding similarity than on the learned relation-specific transformations, potentially incorporating relation-agnostic discriminative signals rather than capturing true regulatory semantics.
 
 ### Validating signed predictions with PerturbSeq
 
@@ -720,17 +632,18 @@ axes = axes.flatten()
 for idx, head in enumerate(RELATION_AWARE_FOCUSED_HEADS):
     
     dat = predicted_relation_type_vs_perturbseq_truth_predictions[head]
-    title = textwrap.fill(HEAD_DESCRIPTIONS[head]["label"], width=30) + "\n" + f"log10p = {predicted_relation_type_vs_perturbseq_truth_pvalues[head].round(2)}"
+    title = textwrap.fill(HEAD_DESCRIPTIONS[head]["label"], width=25) + "\n" + f"log10p = {predicted_relation_type_vs_perturbseq_truth_pvalues[head].round(2)}"
     row_labels = [textwrap.fill(x, width=20) for x in PERTURBSEQ_RELATION_TYPES]
     col_labels = [textwrap.fill(x, width=10) for x in STRONG_ORDERED_SIGNED_PERTURBSEQ_DIRECTIONS]
-    y_label = "Top Scoring Relation-Type" if idx == 0 else None
+    x_label = "PerturbSeq Prediction" if idx >= 2 else None
+    y_label = "Top Scoring Relation-Type" if idx % 2 == 0 else None
     
     plot_heatmap(
         dat,
         row_labels=row_labels,
         column_labels=col_labels,
         title=title,
-        xlabel="PerturbSeq Prediction",
+        xlabel=x_label,
         ylabel=y_label,
         cmap='magma',
         fmt='.2f',
@@ -739,10 +652,10 @@ for idx, head in enumerate(RELATION_AWARE_FOCUSED_HEADS):
         cbar_label='Proportion',
         square=True,
         cbar = False,
-        title_size=13,
-        label_size=13,
-        axis_title_size=10,
-        annot_size=13,
+        title_size=16,
+        label_size=16,
+        axis_title_size=12,
+        annot_size=16,
         ax=axes[idx],
     )
 
@@ -754,19 +667,23 @@ Several patterns emerge from these contingency tables:
 
 - **Relation-type scores lack cross-calibration.** Average scores can vary substantially between relation types within a model. This is most apparent for TransE, where inhibitory edges score systematically higher than activating edges, resulting in predominantly inhibitory predictions regardless of ground truth. Since the loss function compares real edges to negative samples within the same relation-type stratum, models have no incentive to calibrate scores across relation types.
 - **TransE predictions are independent of PerturbSeq ground truth.** TransE's top-scoring relation types are only weakly associated with observed regulatory direction (log10p = -2.98). There is actually a slight enrichment in the off-diagonal quadrants (top-right and bottom-left), where predictions disagree with CRISPR results.
-- **Expressive relation-aware heads achieve strong agreement with ground truth.** The relation-gated MLP and relation-aware attention heads show striking enrichment along the diagonal (top-left and bottom-right quadrants), indicating correct prediction of regulatory direction. The statistical significance is overwhelming (log10p < -300), with meaningful visual enrichment patterns where predicted activation/inhibition aligns with observed PerturbSeq responses.
+- **Top-performing relation-aware heads achieve strong agreement with ground truth.** All three of the top-performing models (DistMult, the relation-gated MLP and relation-aware attention heads) show striking enrichment along the diagonal (top-left and bottom-right quadrants), indicating correct prediction of regulatory direction. The statistical significance is overwhelming (log10p < -300), with meaningful visual enrichment patterns where predicted activation/inhibition aligns with observed PerturbSeq responses.
 
 The agreement between top-scoring relation types and CRISPR ground truth is particularly impressive given several important caveats:
 
 - **Regulatory ground truth is inherently muddy.** Harmonizome's predicted regulatory calls show limited alignment with the Anderson-Darling q-values reported in the original Replogle supplement, highlighting the fundamental difficulty of establishing definitive in vivo regulatory ground truth from experimental data.
 - **PerturbSeq captures both direct and indirect effects.** CRISPRi perturbations measure transcriptome-wide changes that include both immediate regulatory targets and downstream cascade effects. While I'd expect models to predict direct interactions more accurately, the training data itself contains a mixture of direct and indirect interactions, and relation types may provide a means for expressing this distinction.
-- **Signed regulatory edges are rare in the training data.** Activation ("stimulator → modified") and inhibition ("inhibitor → modified") edges comprise a small fraction of the graph compared to undirected physical interactions. The fact that models can accurately distinguish these regulatory directions despite their relative scarcity demonstrates that these concepts are effectively encoded into the vertex and relation-type embeddings.
+- **Signed regulatory edges are rare in the training data.** Activation ("stimulator → modified") and inhibition ("inhibitor → modified") edges comprise a small fraction of the graph compared to undirected physical interactions (~3% of edges). The fact that models can accurately distinguish these regulatory directions despite their relative scarcity demonstrates that these concepts are effectively encoded into the vertex and relation-type embeddings.
 
-Since the best performing relation-aware models may be of use to others, I've released them on HuggingFace:
+## Published models
 
-- [128-dim GraphConv model trained for relation-stratified edge prediction with a DistMult head](https://huggingface.co/seanhacks/relation_prediction_distmult_128e)
-- [128-dim GraphConv model trained for relation-stratified edge prediction with a relation-gated MLP head](https://huggingface.co/seanhacks/relation_gated_mlp)
-- [128-dim GraphConv model trained for relation-stratified edge prediction with a relation-attention MLP head](https://huggingface.co/seanhacks/relation_attention_mlp)
+All of the [data](https://huggingface.co/datasets/seanhacks/relation_prediction) and models used in this analysis are available on Hugging Face.
+
+The best-performing relation-aware models may be of particular interest to others. These are **128-dim GraphConv encoders trained for relation-stratified edge prediction** with the following heads:
+
+- [DistMult head](https://huggingface.co/seanhacks/relation_prediction_distmult_128e)
+- [Relation-gated MLP head](https://huggingface.co/seanhacks/relation_gated_mlp)
+- [Relation-attention MLP head](https://huggingface.co/seanhacks/relation_attention_mlp)
 
 ## Summary
 
@@ -774,8 +691,8 @@ Relation-aware graph neural networks offer a promising path forward for predicti
 
 The results here validate both the expressive, expansive Napistu graphs and the power of mining them with graph neural networks:
 
-- **Expressive architectures learn distinctive transformations.** Relation-aware models can learn different transformations for mechanistic, metabolic, regulatory, and physical associations, with custom heads combining MLPs with gating or attention mechanisms achieving strong relation-type specificity in their predictions.
-- **Models encode meaningful regulatory semantics.** Geometric analysis of knowledge graph embedding methods reveals that activation and inhibition are encoded as partially opposing transformations in the learned embedding space, suggesting models capture regulatory direction beyond simple vertex similarity.
-- **PerturbSeq validation demonstrates biological grounding.** Expressive models show impressive agreement with CRISPR perturbation ground truth, correctly distinguishing activation from inhibition with overwhelming statistical significance (log10p < -300). This validation against orthogonal experimental data confirms the models have learned biologically meaningful representations of regulation.
+- **Appropriate architectures matter more than parameter count.** Top-performing heads (DistMult, relation-gated MLP, relation-attention MLP) all achieve strong relation-type specificity, but through different mechanisms. DistMult accomplishes this with minimal parameters (~1,400) through dimensional weighting, while MLP-based heads use 60-90K parameters for gating or attention mechanisms. Critically, raw attention heads substantially underperform despite having 20× more parameters than DistMult, demonstrating that architectural choices trump raw model size.
+- **Learned relation embeddings prioritize discrimination over semantic meaning.** Activation and inhibition — biologically opposing processes—produce similar rather than anti-correlated geometric transformations. Undirected edges are not encoded with symmetric transformations that would score A→B and B→A equally. The geometric patterns learned by these methods reflect statistical structure useful for edge discrimination, rather than interpretable regulatory semantics.
+- **PerturbSeq validation demonstrates biological grounding.** Top-performing models show impressive agreement with CRISPR perturbation ground truth, correctly distinguishing activation from inhibition with overwhelming statistical significance (log10p < -300). This validation against orthogonal experimental data confirms the models have learned biologically meaningful representations of regulation.
 
-This work opens several opportunities for refinement. Adapting loss functions to calibrate scores across relation types would enable more interpretable cross-relation comparisons and better support for predicting novel interaction types. Continued architectural innovation in encoder-decoder designs — particularly in how relation information gates or modulates vertex representations — could further improve the semantic encoding of regulatory concepts. These advances would strengthen the foundation for computational models that can predict not just molecular associations, but their functional consequences in cellular systems.
+This work opens several opportunities for refinement. Adapting loss functions to calibrate scores across relation types would enable more interpretable cross-relation comparisons and better support for predicting novel interaction types. Continued architectural innovation in encoder–decoder designs — particularly in how relation information gates or modulates vertex representations — could further improve the semantic encoding of regulatory concepts. These advances would strengthen the foundation for computational models capable of predicting not just molecular associations, but also their functional consequences in cellular systems.
