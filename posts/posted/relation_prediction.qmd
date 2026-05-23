@@ -696,3 +696,39 @@ The results here validate both the expressive, expansive Napistu graphs and the 
 - **PerturbSeq validation demonstrates biological grounding.** Top-performing models show impressive agreement with CRISPR perturbation ground truth, correctly distinguishing activation from inhibition with overwhelming statistical significance (log10p < -300). This validation against orthogonal experimental data confirms the models have learned biologically meaningful representations of regulation.
 
 This work opens several opportunities for refinement. Adapting loss functions to calibrate scores across relation types would enable more interpretable cross-relation comparisons and better support for predicting novel interaction types. Continued architectural innovation in encoder–decoder designs — particularly in how relation information gates or modulates vertex representations — could further improve the semantic encoding of regulatory concepts. These advances would strengthen the foundation for computational models capable of predicting not just molecular associations, but also their functional consequences in cellular systems.
+
+## Extras
+
+```{python}
+#| label: teaser_image
+
+head = "distmult"
+
+dat = predicted_relation_type_vs_perturbseq_truth_predictions[head]
+title = textwrap.fill(HEAD_DESCRIPTIONS[head]["label"], width=25) + "\n" + f"log10p = {predicted_relation_type_vs_perturbseq_truth_pvalues[head].round(2)}"
+row_labels = ["(-)", "(+)"]
+col_labels = ["(-)", "(+)"]
+x_label = "PerturbSeq Prediction"
+y_label = "Top Scoring Relation-Type"
+title = "Activation vs. inhibition\nedge prediction agree with\nPerturbSeq ground-truth" + "\n" + f"log10p = {predicted_relation_type_vs_perturbseq_truth_pvalues[head].round(2)}"
+
+plot_heatmap(
+    dat,
+    row_labels=row_labels,
+    column_labels=col_labels,
+    title=title,
+    xlabel=x_label,
+    ylabel=y_label,
+    cmap='magma',
+    fmt='.2f',
+    vmin=0.3,
+    vmax=0.7,
+    cbar_label='Proportion',
+    square=True,
+    cbar = False,
+    title_size=20,
+    label_size=25,
+    axis_title_size=25,
+    annot_size=30,
+)
+```

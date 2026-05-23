@@ -1,0 +1,580 @@
+---
+title: "Decoding Virtual Cell Foundation Models: Architecture and Layer-wise Attention"
+author: "Shackett"
+format:
+  html:
+    embed-resources: true
+    code-fold: true
+    code-summary: "Show the code"
+    toc: true
+    theme: minty
+    highlight: tango
+    code-block-bg: true
+    code-block-border-left: "#5BB867"
+jupyter: blog-staging
+engine: jupyter
+---
+
+Foundation models trained on large corpuses of single-cell RNA-seq data have emerged as one of the most promising frontier technologies in biotech. These models embed cells' expression in a latent space, and then use a transformer architecture to attend to expression embeddings, learning functional coexpression patterns, which can be used to predict diverse properties such as cell type or denoised expression.
+
+These models are built on massive datasets provided by Chan-Zuckerberg Initiative (CZI), Arc Institute, Tahoe Therapeutics and others ([CellxGene](https://cellxgene.cziscience.com/datasets), [Tahoe 100M](https://www.biorxiv.org/content/10.1101/2025.02.20.639398v1), [upcoming dataset](https://biohub.org/news/arc-tahoe-perturbation-dataset/)). Emerging datasets bring additional cellular contexts, making more predictions in-distribution rather than out-of-distribution, and causal grounding with genetic perturbations provides the potential to move beyond coexpression. This causal signal is now being fruitfully mined with impressive results by Altos lab's Cleopatra model in the Arc Institute's 2025 [Virtual Cell Challenge](https://virtualcellchallenge.org/leaderboard).
+
+Foundation models themselves are continually evolving as academic and industry groups experiment with model architectures, inductive biases, new tasks, etc. Now, there is a diverse array of models available through platforms like [CZI models](https://cellxgene.cziscience.com/census-models) and [NVIDIA BioNeMo](https://www.nvidia.com/en-us/industries/healthcare-life-sciences/biopharma/) which can be applied to single-cell RNAseq, sequences, analysis and structural prediction.
+
+The excitement for foundation models and their evolution into multi-scale multi-modal Virtual Cell models is palpable — they form a cornerstone in the CZI's aspirational goal to "cure, prevent, or manage all diseases by the end of this century". (Incidentally, this would require [stopping biological aging](https://www.shackett.org/gompertz/)!)
+
+A clear architecture for this ambition is nicely stated in [How to build the virtual cell with artificial intelligence: Priorities and opportunities](https://pubmed.ncbi.nlm.nih.gov/39672099/). In this paper the authors highlight how **universal representations** of biology could be created at the level of molecules, cells, and multicellular interactions, and different data streams could feed into virtual cell models at an appropriate level. This provides the potential for both forward and reverse engineering biology — predicting how a DNA variant impacts tissue physiology, while also enabling us to backtrack from tissue pathophysiology to distributed molecular circuits (and drug targets!).
+
+These universal representations can be supported with **synthetic instruments** to make diverse predictions, but also with decoders to map a virtual cell's state back to human-interpretable, semantically-meaningful biology.
+
+Here, I will lay the groundwork for decoding the attention mechanisms of four scRNAseq-based foundation models. Specifically, I will:
+
+1. Provide an overview of single-cell foundation models, introducing abstractions which enable generalization.
+2. Extract expression-contextualized gene embeddings and attention weights from scGPT, scFoundation, scPRINT, and AIDO.Cell using model-agnostic data structures.
+3. Compare static gene embeddings across models to assess how differently each model organizes gene identity in latent space.
+4. Compare attention patterns across layers within each model to identify how representations evolve with depth.
+
+In a follow-up post, I'll extend this analysis to compare attention patterns across models and validate them against curated molecular interaction networks.
+
+## What is a single-cell RNAseq foundation model?
+
+A gene expression foundation model takes a single cell as input and learns to represent it by processing the expression levels of thousands of genes simultaneously. To do this, each expressed gene is treated as a token — the basic unit of input, analogous to a word in a language model — and the model learns a rich representation of the cell by modeling how genes relate to one another.
+
+Each gene token is built from two separate components. The first is a **static gene embedding**: a learned vector that encodes the identity of the gene itself, independent of how highly it's expressed in any particular cell. This is analogous to a word embedding in NLP — it captures what a gene is, not what it's doing in this cell. The second is an **expression embedding**: a transformation of the raw count that encodes how active the gene is in this specific cell. These two streams are combined — typically by element-wise addition — to produce a token that carries both "which gene" and "how expressed" information before being passed into the transformer.
+
+The transformer then processes this sequence of gene tokens through multiple layers of multi-head self-attention. Each attention layer computes, for every gene, a weighted combination of all other genes' representations, where the weights reflect how relevant each gene is to understanding the current one. The result is a set of contextualized gene embeddings — representations that encode not just a gene's own identity and expression, but its relationship to the broader transcriptional state of the cell.
+
+The figure below shows the full architecture alongside a detailed view of how a single attention layer operates — from the query, key, and value projections through to the gene-gene attention weights that make these models interpretable.
+
+<img src="figures/interpreting_vc_models/scfoundation_model_overview.png" alt="Overview of single-cell foundation models and attention mechanisms" style="width: 100%;">
+
+**You compare your query against every key to decide how much attention to give each source, then you pull a weighted mixture of their values.**
+
+With this architecture in place, the key question is what the model is trained to do. The most common pretraining objective for bag-of-genes models is masked expression reconstruction: a random subset of gene expression values are zeroed out, and the model must predict the original values using only the remaining genes as context. This forces the model to learn co-expression relationships — to recover a masked gene's expression, it must attend to the genes that are co-regulated with it. The attention weights that emerge from this process directly reflect gene-gene relationships, since a gene's representation is literally built from weighted combinations of its neighbors in expression space.
+
+Not all foundation models fit neatly into this framework. Some, like Geneformer, use a ranked gene sequence rather than a bag of genes, ordering tokens by expression level rather than presenting them all simultaneously. Others, like UCE, sample gene tokens proportional to expression count, allowing the same gene to appear multiple times. These architectural choices affect what the model learns and how its representations can be interpreted. Importantly, for the bag-of-genes models, the n × n attention weight matrix has a direct biological interpretation: entry $A_{ij}$ captures how much gene i attends to gene j when building its contextual representation.
+
+The table below summarizes how eight prominent foundation models instantiate this general framework, highlighting the key architectural choices that determine what each model attends to and what it learns.
+
+```{python}
+#| label: summarize_scfms
+#| echo: false
+
+import pandas as pd
+
+FM_SUMMARY = "1WwA0IPrz-w12ubT5Atz1BmP6AK8nseZzDvqhxiJo3I8"
+url = f"https://docs.google.com/spreadsheets/d/{FM_SUMMARY}/export?format=csv"
+
+df = pd.read_csv(url)
+df
+```
+
+## Processing foundation models
+
+Each foundation model arrives with its own ecosystem: private Python dependencies, bespoke preprocessing pipelines, and idiosyncratic gene vocabularies. Running multiple models in a single environment is often impractical, so I adopted a two-environment pattern. Each model is processed in its own isolated environment by a dedicated process_x() function that handles model loading, dataset preprocessing, and the forward pass. The results are serialized to a pair of files — {prefix}_weights.npz and {prefix}_metadata.json — that capture everything needed for downstream analysis. A separate analysis environment then reconstructs the full object via `FoundationModel.load()`, with no knowledge of or dependency on the original model library.
+
+```{text}
+FoundationModels
+    FoundationModel
+        FoundationModelWeights
+            GeneEmbeddings (static)
+                GeneAnnotations
+            List[AttentionLayer]
+        DatasetGeneEmbeddings
+            GeneEmbeddingsSet (all embeddings for a given dataset)
+                GeneEmbeddings (a single 2D embedding matrix, e.g., of a cell type or cluster)
+                    GeneAnnotations
+        ModelMetadata
+```
+
+The object-oriented design pays off immediately in two ways. First, Pydantic validation enforces that each model's data is formatted consistently — gene annotations must contain the required identifier columns, embedding dimensions must be internally consistent, and vocabulary sizes must match. Second, the save/load round-trip is clean and lossless, which is what makes the two-environment pattern work in practice. Each GeneEmbeddings instance stores both the native vocabulary used by the source model and systematic Ensembl gene IDs, so genes can be matched across models without discarding the original identifiers.
+
+`FoundationModelStore` provides lazy loading on top of this structure: the ~5 GB of weights are partitioned by model and category, so any given analysis loads only what it needs. Iterating over cell-type clusters or comparing a subset of models does not require materializing the full weight set in memory.
+
+<<bio-aside>>
+When a cell's expression profile is passed through the model, each gene receives a combined input — its static identity embedding summed with an expression embedding encoding its count in that cell. The transformer then contextualizes these joint representations by attending across all genes simultaneously, so each gene's final output reflects not just its identity and expression level but the full transcriptional context of that cell. I aggregate these contextualized representations at the cell type level — grouping cells into leiden clusters and averaging — for two reasons. First, a cluster's average embedding remains close to its individual members in latent space, so the aggregation is faithful. Second, cell-type resolution is the natural unit for mechanistic interpretation: what we want to understand is which regulatory circuits are active in a given cell type, and a cell-type-level expression embedding provides exactly that perspective.
+<</bio-aside>>
+
+## Loading foundation models
+
+### Environment setup
+
+Most of my posts build off of artifacts hosted on GCS or GitHub but to reproduce this one you will need to first process models from scratch (the weights are ~5 GB and I'm not keen to serving these from my personal GCS indefinitely).
+
+1. For model-specific processing refer to [foundation model ETL](https://github.com/napistu/napistu-scrapyard/tree/main/applications/foundation_models).
+
+2. Install [uv](https://docs.astral.sh/uv/#highlights) (or use `pip` if preferred).
+
+3. Set up a Python environment:
+
+```bash
+uv venv --python 3.11
+source .venv/bin/activate
+# Core dependencies
+uv pip install torch==2.8.0
+uv pip install "napistu-torch==0.3.12"
+# if you'd like to render the notebook, you'll need to install these additional dependencies
+uv pip install seaborn ipykernel nbformat nbclient umap-learn
+python -m ipykernel install --user --name=blog-staging
+```
+
+4. Download the [`interpreting_sc_foundation_models.qmd`](https://github.com/shackett/shackett/blob/master/posts/posted/interpreting_sc_foundation_models.qmd) notebook (or copy and paste the relevant code blocks).
+
+5. Configure `EXPERIMENTS_DIR` and other paths in the `env_setup` code block to point to your local directories.
+
+### Configuration and imports
+
+```{python}
+#| label: env_setup
+#| output: false
+
+# standard library
+import logging
+import re
+from pathlib import Path
+from typing import List, Optional
+
+# 3rd party
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from matplotlib.colors import LinearSegmentedColormap
+import seaborn as sns
+
+# Napistu
+from napistu.utils import load_pickle, save_pickle
+
+# Napistu-Torch
+from napistu_torch.foundation_models.attention_patterns import (
+    AttentionPatternsInputs,
+    aggregate_embedding_comparisons_over_categories,
+    validate_embedding_comparisons_settings,
+)
+from napistu_torch.foundation_models.foundation_models import (
+    FoundationModelStore,
+    FoundationModels,
+    _get_disk_name,
+)
+from napistu_torch.foundation_models.constants import COMPARE_EMBEDDINGS_COMPARISONS, MODEL_NICE_NAMES
+from napistu_torch.utils.pd_utils import reorder_multindex_by_categorical_and_numeric
+from napistu_torch.visualization.heatmaps import plot_heatmap
+
+logging.basicConfig(level=logging.INFO, format='%(levelname)s:%(name)s:%(message)s')
+logger = logging.getLogger(__name__)
+
+# paths
+PROJECT_DIR = Path("~/Desktop/DATA/sc_foundation_models").expanduser()
+CACHE_DIR = PROJECT_DIR / "cache"
+MODEL_OUTPUTS_DIR = PROJECT_DIR / "model_outputs"  # where extracted foundation model weights live
+
+# settings affecting which models are included
+INCLUDE_SCGPT = True
+SCGPT_MODEL_NAME = "scGPT"  # scGPT only uses the top 1200 highly variable genes
+INCLUDE_SCFOUNDATION = False  # set True if MODEL_OUTPUTS_DIR has scFoundation weights
+SCFOUNDATION_MODEL_NAME = "scFoundation"
+IGNORE_CATEGORIES_WITH = ["unknown"]
+IGNORED_MODELS = ["AIDOCell_aido_cell_100m"]
+EMBEDDING_DATASET = "efthymiou2025"  # adipose tissue dataset from Eftimiou et al. 2025
+
+# settings affecting specific functions and behavior
+BY_ABSOLUTE_VALUE = False  # select top attention pairs by absolute value or just the most positive
+TOP_K = 10000             # how many top attention pairs to consider
+IGNORE_SELF_ATTENTION = True
+CONSENSUS_METHOD = "sum"
+OVERWRITE = False
+VERBOSE = False
+COMPARISON_TYPES = [
+    COMPARE_EMBEDDINGS_COMPARISONS.RESIDUAL_STREAM_CORRELATIONS,
+    COMPARE_EMBEDDINGS_COMPARISONS.MODEL_LAYER_CORRELATIONS,
+]
+
+bwy = LinearSegmentedColormap.from_list(
+    "blue_white_yellow",
+    ["#2166AC", "#FFFFFF", "#F5C800"]  # strong blue → white → bright yellow
+)
+
+
+# data and path management
+
+def to_filename(s: str) -> str:
+    s = re.sub(r'[^\w\s-]', '', s)
+    s = re.sub(r'\s+', '_', s)
+    return s.strip('-_')
+
+
+def get_cache_path(dataset: str, category: str, include_scgpt: bool) -> Path:
+    scgpt_flag = "with_scgpt" if include_scgpt else "without_scgpt"
+    return CACHE_DIR / f"comparisons_{dataset}_{to_filename(category)}_{scgpt_flag}.pkl"
+
+
+def get_all_categories(
+    output_dir: str = MODEL_OUTPUTS_DIR,
+    embedding_dataset: str = EMBEDDING_DATASET,
+    ignore_categories_with: List[str] = IGNORE_CATEGORIES_WITH,
+) -> List[str]:
+
+    model_names = get_model_names()
+    stores = [
+        FoundationModelStore(Path(output_dir) / name)
+        for name in model_names
+    ]
+
+    category_sets = [
+        set(store.list_categories(embedding_dataset))
+        for store in stores
+    ]
+
+    common = category_sets[0].intersection(*category_sets[1:])
+
+    return sorted([
+        cat for cat in common
+        if not any(substring in cat for substring in ignore_categories_with)
+    ])
+
+
+def append_scfoundation_metadata_stub(model_metadata_summary: pd.DataFrame) -> pd.DataFrame:
+    """If scFoundation weights are absent, preserve a readable row for the metadata table."""
+    if "model type" not in model_metadata_summary.columns:
+        return model_metadata_summary
+    if SCFOUNDATION_MODEL_NAME in model_metadata_summary["model type"].astype(str).values:
+        return model_metadata_summary
+    label = MODEL_NICE_NAMES.get((SCFOUNDATION_MODEL_NAME, None), SCFOUNDATION_MODEL_NAME)
+    row = {c: pd.NA for c in model_metadata_summary.columns}
+    row["model"] = label
+    row["model type"] = SCFOUNDATION_MODEL_NAME
+    return pd.concat([model_metadata_summary, pd.DataFrame([row])], ignore_index=True)
+
+
+def get_model_comparison_metadata(
+    include_scgpt: bool = True,
+    include_scfoundation: Optional[bool] = None,
+):
+    inc_sf = INCLUDE_SCFOUNDATION if include_scfoundation is None else include_scfoundation
+
+    model_comparison_metadata = dict()
+
+    models = FoundationModels.load_multiple(
+        MODEL_OUTPUTS_DIR,
+        get_model_names(include_scgpt, include_scfoundation=inc_sf),
+        verbose=False,
+    )
+    model_comparison_metadata["model_order"] = models.model_names
+
+    model_metadata_summary = models.get_summary().rename(
+        columns={
+            "full_name": "model",
+            "model": "model type",
+            "variant": "model variant",
+            "embed_dim": "# embedding dim",
+            "n_layers": "# layers",
+            "n_heads": "# heads",
+            "parameter_count": "# parameters",
+        }
+    )
+
+    def _n_genes_for_model(model):
+        a_category = model.store.list_categories(EMBEDDING_DATASET)[0]
+        layer_embeddings = model.load_category_residuals(EMBEDDING_DATASET, a_category)
+        any_ge = next(iter(layer_embeddings.values()))
+        return any_ge.n_genes
+
+    model_metadata_summary["# genes in dataset embedding"] = [
+        _n_genes_for_model(m) for m in models.models
+    ]
+    model_comparison_metadata["model_metadata_summary"] = model_metadata_summary
+
+    return model_comparison_metadata
+
+
+def get_model_names(
+    include_scgpt: bool = True,
+    include_scfoundation: Optional[bool] = None,
+    ignored_models: List[str] = IGNORED_MODELS,
+) -> List[str]:
+    """Return disk names for all models to include in analysis."""
+    inc_sf = INCLUDE_SCFOUNDATION if include_scfoundation is None else include_scfoundation
+    full_names = [
+        _get_disk_name(model_name, model_variant)
+        for model_name, model_variant in MODEL_NICE_NAMES
+        if include_scgpt or model_name != SCGPT_MODEL_NAME
+        if inc_sf or model_name != SCFOUNDATION_MODEL_NAME
+    ]
+
+    if ignored_models:
+        invalid = [name for name in ignored_models if name not in full_names]
+        if invalid:
+            logger.warning(f"Ignored models not found in known model names: {invalid}")
+        full_names = [name for name in full_names if name not in ignored_models]
+
+    return full_names
+```
+
+## Within-model comparisons
+
+To explore how models organize gene representations and how those representations evolve across layers, I precomputed two types of comparisons for each cell cluster:
+
+1. Cross-model Spearman correlation of within-model gene-gene cosine similarities, to assess whether the static gene embeddings learned by different models share a common geometry.
+2. Within-model, cross-layer rank agreement: for each layer, which fraction of its top 10K attention pairs are also highly ranked in every other layer of the same model?
+
+I created these summaries for each cell cluster, and also carried out the comparisons with and without including scGPT because scGPT uses a much smaller vocabulary (1,200 highly variable genes) compared to the other transcriptome-wide models (~20K genes). All comparisons were loaded together and aggregated so the results that follow reflect average patterns across all clusters.
+
+### Caching and loading comparisons
+
+```{python}
+#| label: construct_and_load_cache
+
+all_categories = get_all_categories()
+
+for category in all_categories:
+    cache_path = get_cache_path(EMBEDDING_DATASET, category, INCLUDE_SCGPT)
+
+    if cache_path.is_file() and not OVERWRITE:
+        if VERBOSE:
+            logger.info(f"Skipping {category}, cache exists at {cache_path}")
+        continue
+
+    logger.info(f"Running {category}")
+
+    model_prefixes = get_model_names(INCLUDE_SCGPT, include_scfoundation=INCLUDE_SCFOUNDATION)
+    models_subset = FoundationModels.load_multiple(MODEL_OUTPUTS_DIR, model_prefixes, verbose=False)
+
+    attention_patterns_inputs = AttentionPatternsInputs.from_expression(
+        models_subset, EMBEDDING_DATASET, category
+    )
+
+    comparisons = attention_patterns_inputs.compare(
+        top_k=TOP_K,
+        comparison_types=COMPARISON_TYPES,
+        consensus_method=CONSENSUS_METHOD,
+        by_absolute_value=BY_ABSOLUTE_VALUE,
+        ignore_self_attention=IGNORE_SELF_ATTENTION,
+        verbose=VERBOSE,
+    )
+
+    save_pickle(cache_path, comparisons)
+
+    del attention_patterns_inputs, comparisons, models_subset
+
+# summaries of models under consideration
+model_metadata_summary_full = append_scfoundation_metadata_stub(
+    get_model_comparison_metadata(include_scgpt=True, include_scfoundation=INCLUDE_SCFOUNDATION)[
+        "model_metadata_summary"
+    ]
+)
+model_comparison_metadata = get_model_comparison_metadata(INCLUDE_SCGPT, INCLUDE_SCFOUNDATION)
+model_order = model_comparison_metadata["model_order"]
+
+# load and aggregate comparisons across categories
+category_summaries = dict()
+for category in all_categories:
+    cache_path = get_cache_path(EMBEDDING_DATASET, category, INCLUDE_SCGPT)
+    category_comparisons = load_pickle(cache_path)
+    validate_embedding_comparisons_settings(
+        category_comparisons, TOP_K, CONSENSUS_METHOD, BY_ABSOLUTE_VALUE, IGNORE_SELF_ATTENTION, model_order
+    )
+    category_summaries[category] = category_comparisons
+
+comparisons = aggregate_embedding_comparisons_over_categories(category_summaries)
+```
+
+Now that the models have been loaded and processed, we can compare the models based on a few key metrics:
+- # of embedding dimensions: number of latent dimensions used to embed genes
+- # of layers: number of transformer layers
+- # of heads: number of attention heads in each layer
+- # of parameters: number of trainable parameters
+- # of genes in dataset embedding: number of genes in the dataset embedding following model-specific preprocessing.
+
+There are 4 distinct model architectures and two of these models are available in a small, medium, and large version.
+
+```{python}
+#| label: show_model_metadata_table
+
+def _inclusion_mark(model_type):
+    mt = "" if pd.isna(model_type) else str(model_type).strip()
+    if mt == SCGPT_MODEL_NAME and not INCLUDE_SCGPT:
+        return "❌"
+    if mt == SCFOUNDATION_MODEL_NAME and not INCLUDE_SCFOUNDATION:
+        return "❌"
+    return "✅"
+
+
+model_metadata_summary_full["included"] = model_metadata_summary_full["model type"].apply(_inclusion_mark)
+
+display(model_metadata_summary_full)
+```
+
+
+```{python}
+#| label: construct_contextual_text_version
+#| output: false
+#| echo: false
+
+ngenes = category_comparisons["settings"]["n_genes"]
+
+TEXT_VERSIONS = {
+    True : f"In this version of the notebook, scGPT is included along with the other models. This is a meaningful choice because scGPT uses a much more restricted vocabulary (top 1,200 highly variable genes), compared to the other models which are transcriptome-wide (~20,000 genes in CellxGene). Because scGPT is included and I want to be able to compare models restricted to a common set of genes (for convenience and to avoid biases), this analysis will focus on the modest vocabulary size of {ngenes} genes. While this is a relatively small number of genes, the results I'll present are quite similar whether I exclude or include scGPT and an alternative version of the notebook is available which excludes scGPT.",
+    False : f"In this version of the notebook, scGPT is excluded from the analysis. This is a meaningful choice because scGPT uses a much more restricted vocabulary (top 1,200 highly variable genes), compared to the other models which are transcriptome-wide (~20K-50K genes). Because scGPT is excluded, the remaining models will be compared at a transcriptome-wide scale using a common vocabulary of {ngenes} genes. While scGPT uses a small number of genes, its attention patterns align robustly with validated mechanisms — you can inspect an alternative version of this notebook with scGPT included and focusing on a smaller number of genes here XXXX. This writeup will still reference the scGPT results, but all of the visualizations and numerical results will be based solely on the transcriptome-wide analysis of the remaining models."
+}
+```
+
+`{python} TEXT_VERSIONS[INCLUDE_SCGPT]`
+
+### Static gene embedding correlations
+
+Since scGPT, scFoundation, and scPRINT learn a static gene embedding (# of genes in vocabulary × hidden dimension), molecular similarity could be partially encoded in the static gene embedding itself — analogous to how GNNs encode molecular similarity in vertex embeddings. AIDO.Cell, in contrast, directly encodes the integer position of genes in the vocabulary to create its static embedding, so this comparison is most informative for the other three.
+
+Note that while we call these "static" embeddings, the comparison below is computed on expression embeddings from a specific dataset — so the static gene identity component is present alongside the expression-modulated signal. The Spearman correlation captures whether genes occupy similar relative positions across models regardless of the absolute scale or orientation of the latent space.
+
+To compare expression embeddings, I filtered and reordered each model's vocabulary to a common gene list. With the gene vocabularies aligned, I computed cosine similarity between all pairs of genes within each model, then calculated the Spearman correlation of these cosine similarity matrices across model pairs. This directly assesses whether models agree on which genes are representationally similar, regardless of the latent dimension or how signals are encoded in individual dimensions.
+
+```{python}
+#| label: directly_compare_gene_embeddings
+
+if "residual_stream_correlations" in comparisons:
+
+    embeddings_comparisons = comparisons["residual_stream_correlations"]
+
+    wide_embeddings_comparisons = (
+        pd.DataFrame(list(embeddings_comparisons.items()), columns=['model', 'rho'])
+        .assign(
+            model1=lambda df: df['model'].str.split("_vs_", expand=True)[0],
+            model2=lambda df: df['model'].str.split("_vs_", expand=True)[1]
+        )
+        .pivot(index='model2', columns='model1', values='rho')
+        .reindex(index=model_order, columns=model_order)
+        .dropna(axis=0, how="all")
+        .dropna(axis=1, how="all")
+    )
+
+    plot_heatmap(
+        wide_embeddings_comparisons,
+        mask_upper_triangle=True,
+        vmax=1,
+        vmin=0,
+        cbar_label='Spearman ρ',
+        suptitle="Embedding similarity",
+        title="Based on the cross-model correlation of within model\ngene-gene cosine similarity",
+        title_size=12,
+        square=True,
+        title_fontstyle="italic",
+        title_fontweight="normal",
+    )
+
+    plt.show()
+```
+
+In this analysis, scGPT and variants of scPRINT generally agree strongly in terms of their relative organization of genes in the embedding space. This may reflect model pretraining or initialization — for example, while not publicly documented it's likely that the scPRINT small model was initialized using the large model's embeddings given their highly correlated embeddings ($\rho \approx 0.98$). Aside from these examples of highly consistent embeddings, most pairs of models structure genes independently, resulting in correlations near zero. This suggests that while most models generate a learned embedding reflecting gene identity and expression, this representation is largely idiosyncratic to individual models and hence biological signal is captured downstream of the embeddings in the transformers which attend to these embeddings.
+
+### Cross-layer attention patterns
+
+Like with a comparison of static gene embeddings, I speculated that if models were learning similar biological signals, we would see consistent attention patterns across layers within the same model. It's been suggested that scRNAseq transformers capture signals in three phases:
+
+- **Lower layers**: Adapting — representations adjust from the initial embedding to the transformer's working space
+- **Middle layers**: Expression-agnostic gene relationships — the model builds up stable gene-gene associations
+- **Upper layers**: Contextual gene relationships — cell-type-specific co-expression patterns emerge
+
+If this three-phase picture holds, we would expect strong layer-layer agreement in the middle and upper phases, with the lower "adapting" layers being more idiosyncratic.
+
+Here, I'll explore the similarity of attention patterns across layers within each model by computing the Spearman correlation between every pair of layers' top-ranked attention edges.
+
+<ai-aside>
+The limitations of layer-wise analysis.
+What we would get with attention rollout and why this wasn't used here.
+</ai-aside>
+
+```{python}
+#| label: model_layer_correlations
+
+model_layer_correlations = comparisons["model_layer_correlations"]
+
+n_columns = np.ceil(len(model_order) / 2).astype(int)
+width_ratios = (
+    ([1] * (n_columns - 1) + [1.3]) if n_columns > 1 else [1]
+)
+fig, axes = plt.subplots(
+    2,
+    n_columns,
+    figsize=(20, 16),
+    gridspec_kw={"width_ratios": width_ratios},
+)
+axes = axes.flatten()
+
+for idx, model_name in enumerate(model_order):
+
+    data = model_layer_correlations[model_name]
+    annot_size = 15 - 2*np.sqrt(data.shape[0])
+
+    plot_heatmap(
+        data,
+        row_labels=range(data.shape[0]),
+        title=model_name,
+        cbar=False,
+        fmt='.2f',
+        vmax=0.5,
+        vmin=-0.5,
+        cbar_label='Spearman ρ',
+        cmap=bwy,
+        mask_upper_triangle=True,
+        square=True,
+        title_size=22,
+        annot_size=annot_size,
+        title_fontstyle="italic",
+        ax=axes[idx],
+    )
+
+plt.suptitle("Within model layer x layer Spearman correlations using all top attentions", fontsize=24, fontweight="bold")
+plt.tight_layout(rect=[0, 0, 1, 0.98])
+plt.show()
+```
+
+The anti-correlation between layers is partially a **winner's curse artifact**: selecting the top K attention pairs from one layer means those pairs will tend to be lower-ranked in other layers simply by regression to the mean, even if the underlying biology is shared. This inflates the apparent divergence between layers.
+
+To get around this issue, I explored a rank-agreement alternative: select the top K attention pairs from a query layer, then evaluate the *median quantile* of those pairs in every other layer. If the evaluation layer assigns most of the query layer's top pairs to the top of its own ranking, that's evidence of genuine cross-layer coherence — the signal is consistent, not just the artifact of selection.
+
+```{python}
+#| label: model_layer_rank_agreement
+
+model_layer_rank_agreement = comparisons["model_layer_rank_agreement"]
+
+n_columns = np.ceil(len(model_order) / 2).astype(int)
+fig, axes = plt.subplots(2, n_columns, figsize=(20, 16))
+axes = axes.flatten()
+
+for idx, model_name in enumerate(model_order):
+
+    conditional_quantiles = model_layer_rank_agreement[model_name].pivot_table(
+        index="query_layer", columns="eval_layer", values="median_quantile", aggfunc="median"
+    )
+
+    x_title = "Evaluation layer" if idx >= n_columns else None
+    y_title = f"Top {TOP_K} layer" if idx % n_columns == 0 else None
+    annot_size = 15 - 2*np.sqrt(conditional_quantiles.shape[0])
+
+    plot_heatmap(
+        conditional_quantiles,
+        row_labels=range(conditional_quantiles.shape[0]),
+        title=model_name,
+        xlabel=x_title,
+        ylabel=y_title,
+        cbar=False,
+        cmap="viridis",
+        fmt='.2f',
+        vmax=1,
+        vmin=0,
+        mask_upper_triangle=False,
+        square=True,
+        title_size=22,
+        axis_title_size=18,
+        annot_size=annot_size,
+        title_fontstyle="italic",
+        ax=axes[idx],
+    )
+
+plt.suptitle("Median quantiles in an evaluation layer of the topK pairs in a query layer", fontsize=24, fontweight="bold")
+plt.tight_layout(rect=[0, 0, 1, 0.98])
+plt.show()
+```
+
+The rank-agreement heatmaps provide a cleaner picture of cross-layer coherence than raw Spearman correlations. Cells near the diagonal reflect a query layer's agreement with its immediate neighbors, while off-diagonal coherence between early and late layers would signal that the model is learning stable gene-gene relationships throughout. The three-phase layer interpretation predicts that the adapting layers (early) should be the most idiosyncratic, while middle and late layers should show stronger mutual agreement as the model converges on stable co-expression structure.
+
+In a follow-up post, I'll extend this analysis to compare attention patterns across models, asking whether different architectures converge on similar gene-gene relationships — and whether those relationships are enriched for curated molecular interactions.
